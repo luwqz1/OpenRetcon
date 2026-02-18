@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 from retcon.schema.enums import Enum
 from retcon.schema.graph import APISchema
+from retcon.schema.nodes import Node
 from retcon.schema.objects import Model
 from retcon.schema.paths import Operation
 from retcon.schema.types import TypeRef
@@ -13,6 +14,9 @@ class ABCGenerator(ABC):
     @abstractmethod
     def generate(self, schema: APISchema) -> dict[str, str]:
         """Generate all files for *schema*.
+
+        Implementations may also use ``schema.custom_nodes`` for user-defined
+        nodes added during the pipeline.
 
         Returns a mapping ``{filename: content}``.
         """
@@ -31,7 +35,11 @@ class ABCGenerator(ABC):
 
     @abstractmethod
     def type_to_string(self, type_ref: TypeRef) -> str:
-        """Convert an IR :class:`TypeRef` to a type string in the target language."""
+        """Convert :class:`TypeRef` to a type string in the target language."""
+
+    def generate_custom_node(self, node: Node) -> str | None:
+        """Optional hook for language-specific custom node generation."""
+        return None
 
 
 __all__ = ("ABCGenerator",)

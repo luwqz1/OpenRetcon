@@ -6,7 +6,7 @@ class SchemaError(Exception):
 
 
 class ConversionError(SchemaError):
-    """Raised when an OpenAPI document cannot be converted to the IR.
+    """Raised when an OpenAPI document cannot be converted to the schema.
 
     Attributes:
         path: JSON-pointer-like path to the problematic element.
@@ -21,7 +21,7 @@ class ConversionError(SchemaError):
 
 
 class ValidationError(SchemaError):
-    """Raised when an IR graph fails a consistency check.
+    """Raised when a schema graph fails a consistency check.
 
     For example, a :class:`~retcon.schema.types.ModelRef` that points to a
     model name not present in :attr:`~retcon.schema.graph.APISchema.models`.

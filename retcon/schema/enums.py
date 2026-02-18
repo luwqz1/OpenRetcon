@@ -7,7 +7,7 @@ class EnumValue(Node, kw_only=True):
     """A single member of an :class:`Enum`."""
 
     name: str
-    value: str | int | float
+    value: str | int | float | bool
 
 
 class Enum(Node, kw_only=True):

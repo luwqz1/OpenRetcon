@@ -6,7 +6,7 @@ from retcon.schema.nodes import Node
 
 
 class NodeVisitor:
-    """Walk the IR tree and optionally mutate nodes in-place.
+    """Walk tree of nodes and optionally mutate nodes in-place.
 
     For every node encountered the visitor calls ``visit_<ClassName>(node)``.
     If no specific handler exists, :meth:`generic_visit` is used which

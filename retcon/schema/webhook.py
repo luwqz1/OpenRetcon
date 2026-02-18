@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import msgspec
+
 from retcon.schema.nodes import Node
 from retcon.schema.paths import Operation
 
@@ -12,7 +14,7 @@ class Webhook(Node, kw_only=True):
     """
 
     name: str
-    operations: list[Operation] = []
+    operations: list[Operation] = msgspec.field(default_factory=list)
     description: str | None = None
 
 

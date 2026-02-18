@@ -25,7 +25,7 @@ class Model(Node, kw_only=True):
     """
 
     name: str
-    fields: list[Field] = []
+    fields: list[Field] = msgspec.field(default_factory=list)
     description: str | None = None
 
 
