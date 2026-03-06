@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import re
 import typing
 
@@ -21,6 +22,7 @@ from retcon.schema.types import (
     AnyType,
     ArrayType,
     BooleanType,
+    Constraints,
     EnumRef,
     IntegerType,
     MapType,
@@ -45,9 +47,11 @@ _TYPE_MAP: typing.Final = {
 }
 
 
-class _ConversionContext(msgspec.Struct, kw_only=True):
+@dataclasses.dataclass
+class _ConversionContext:
     enum_names: set[str]
     model_names: set[str]
+    inline_enums: dict[str, Enum] = dataclasses.field(default_factory=dict)
 
 
 def from_openapi_document(document: OpenAPIDocument) -> APISchema:
@@ -103,6 +107,10 @@ def _convert_openapi(spec: oas300.OpenAPI | oas310.OpenAPI | oas320.OpenAPI) -> 
 
     api_schema.endpoints.extend(_convert_paths(spec, context))
     api_schema.webhooks.extend(_convert_webhooks(spec, context))
+
+    for inline_enum in context.inline_enums.values():
+        api_schema.enums.append(inline_enum)
+
     return api_schema
 
 
@@ -144,9 +152,10 @@ def _convert_model(name: str, schema: typing.Any, context: _ConversionContext) -
 
     for prop_name, prop_schema in properties.items():
         field_default = getattr(prop_schema, "default", msgspec.UNSET)
+        name_hint = _to_pascal_case_simple(name) + _to_pascal_case_simple(prop_name)
         field_kwargs: dict[str, typing.Any] = {
             "name": prop_name,
-            "type": _to_type_ref(prop_schema, context),
+            "type": _to_type_ref(prop_schema, context, name_hint=name_hint),
             "required": prop_name in required,
             "description": getattr(prop_schema, "description", None),
         }
@@ -297,12 +306,13 @@ def _convert_parameter(parameter: typing.Any, context: _ConversionContext) -> Pa
     if not name or not location:
         return None
 
-    type_ref = _to_type_ref(getattr(parameter, "schema", None), context)
+    param_hint = _to_pascal_case_simple(name) if name else None
+    type_ref = _to_type_ref(getattr(parameter, "schema", None), context, name_hint=param_hint)
     if isinstance(type_ref, AnyType):
         media_type = _pick_primary_media_type(getattr(parameter, "content", None) or {})
         if media_type is not None:
             _, media = media_type
-            type_ref = _to_type_ref(getattr(media, "schema", None), context)
+            type_ref = _to_type_ref(getattr(media, "schema", None), context, name_hint=param_hint)
 
     required = bool(getattr(parameter, "required", False))
     if location == "path":
@@ -360,7 +370,75 @@ def _pick_primary_media_type(content: dict[str, typing.Any]) -> tuple[str, typin
     return (first_content_type, content[first_content_type])
 
 
-def _to_type_ref(schema: typing.Any, context: _ConversionContext) -> TypeRef:
+def _to_pascal_case_simple(name: str) -> str:
+    """Convert a name to PascalCase for use as an inline enum name component."""
+    parts = re.split(r"[^a-zA-Z0-9]+", name)
+    return "".join(p.capitalize() for p in parts if p)
+
+
+def _unique_inline_enum_name(base: str, context: _ConversionContext) -> str:
+    """Return a name derived from *base* that does not clash with any known type name."""
+    all_taken = context.enum_names | context.model_names
+    name = base
+    counter = 2
+    while name in all_taken:
+        name = f"{base}{counter}"
+        counter += 1
+    return name
+
+
+def _extract_constraints(schema: typing.Any) -> Constraints | None:
+    """Extract validation constraints from a raw OAS Schema into :class:`Constraints`.
+
+    Handles both OAS 3.0 (``exclusiveMinimum``/``exclusiveMaximum`` are booleans)
+    and OAS 3.1+ (they are numeric exclusive bounds).
+    """
+    minimum = getattr(schema, "minimum", None)
+    maximum = getattr(schema, "maximum", None)
+    exc_min = getattr(schema, "exclusiveMinimum", None)
+    exc_max = getattr(schema, "exclusiveMaximum", None)
+
+    gt: float | None = None
+    ge: float | None = None
+    lt: float | None = None
+    le: float | None = None
+
+    if isinstance(exc_min, bool):
+        # OAS 3.0: exclusiveMinimum is a flag on minimum
+        if minimum is not None:
+            gt, ge = (minimum, None) if exc_min else (None, minimum)
+    else:
+        # OAS 3.1+: exclusiveMinimum is the exclusive bound itself
+        if exc_min is not None:
+            gt = exc_min
+        if minimum is not None:
+            ge = minimum
+
+    if isinstance(exc_max, bool):
+        # OAS 3.0: exclusiveMaximum is a flag on maximum
+        if maximum is not None:
+            lt, le = (maximum, None) if exc_max else (None, maximum)
+    else:
+        # OAS 3.1+: exclusiveMaximum is the exclusive bound itself
+        if exc_max is not None:
+            lt = exc_max
+        if maximum is not None:
+            le = maximum
+
+    c = Constraints(
+        gt=gt,
+        ge=ge,
+        lt=lt,
+        le=le,
+        multiple_of=getattr(schema, "multipleOf", None),
+        pattern=getattr(schema, "pattern", None),
+        min_length=getattr(schema, "minLength", None) or getattr(schema, "minItems", None),
+        max_length=getattr(schema, "maxLength", None) or getattr(schema, "maxItems", None),
+    )
+    return None if c.is_empty() else c
+
+
+def _to_type_ref(schema: typing.Any, context: _ConversionContext, name_hint: str | None = None) -> TypeRef:
     if schema is None or isinstance(schema, bool):
         return AnyType()
 
@@ -375,7 +453,17 @@ def _to_type_ref(schema: typing.Any, context: _ConversionContext) -> TypeRef:
             return AnyType()
         return AnyType()
 
+    # Inline enum detection: schema has an `enum` field with values and a name hint.
+    if name_hint and _schema_is_enum(schema):
+        nullable, _ = _extract_nullable_type(schema)
+        enum_name = _unique_inline_enum_name(name_hint, context)
+        enum_node = _convert_enum(enum_name, schema)
+        context.inline_enums[enum_name] = enum_node
+        context.enum_names.add(enum_name)
+        return EnumRef(name=enum_name, nullable=nullable)
+
     nullable, type_name = _extract_nullable_type(schema)
+    constraints = _extract_constraints(schema)
 
     union_variants: list[TypeRef] = []
 
@@ -390,7 +478,7 @@ def _to_type_ref(schema: typing.Any, context: _ConversionContext) -> TypeRef:
     if type_name == "array":
         item_schema = getattr(schema, "items", None)
         item_type = _to_type_ref(item_schema, context)
-        return ArrayType(item_type=item_type, nullable=nullable)
+        return ArrayType(item_type=item_type, nullable=nullable, constraints=constraints)
 
     if type_name == "object" or getattr(schema, "properties", None) is not None or getattr(schema, "additionalProperties", None) is not None:
         additional = getattr(schema, "additionalProperties", None)
@@ -399,7 +487,11 @@ def _to_type_ref(schema: typing.Any, context: _ConversionContext) -> TypeRef:
         return MapType(value_type=_to_type_ref(additional, context), nullable=nullable)
 
     if type_name in ("integer", "number", "string"):
-        return _TYPE_MAP[type_name](format=getattr(schema, "format", None), nullable=nullable)
+        return _TYPE_MAP[type_name](
+            format=getattr(schema, "format", None),
+            nullable=nullable,
+            constraints=constraints,
+        )
 
     return BooleanType(nullable=nullable) if type_name == "boolean" else AnyType(nullable=nullable)
 

@@ -1,3 +1,5 @@
+# pyright: reportUnnecessaryIsInstance=false, reportUnreachable=false
+
 from __future__ import annotations
 
 import re
@@ -55,7 +57,7 @@ def decode_openapi_document(document: OpenAPIDocument) -> OpenAPIObject:
         source = document
     elif isinstance(document, str):
         source = _decode_json_mapping(document.encode("utf-8"))
-    elif isinstance(document, (bytes, bytearray)):
+    elif isinstance(document, bytes | bytearray):
         source = _decode_json_mapping(document)
     else:
         raise OpenAPIParseError(f"Unsupported OpenAPI document type: {type(document).__name__}")
@@ -71,7 +73,7 @@ def decode_openapi_document(document: OpenAPIDocument) -> OpenAPIObject:
         raise OpenAPIParseError(str(exc)) from exc
 
 
-def _decode_json_mapping(payload: bytes | bytearray) -> dict[str, typing.Any]:
+def _decode_json_mapping(payload: bytes | bytearray, /) -> dict[str, typing.Any]:
     try:
         parsed = msgspec.json.decode(payload)
     except msgspec.DecodeError as exc:

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import typing
+
 import msgspec
 
 from retcon.schema.nodes import Node
+
+if typing.TYPE_CHECKING:
+    from retcon.schema.graph import APISchema
 
 
 class NodeVisitor:
@@ -25,6 +30,20 @@ class NodeVisitor:
             def visit_Model(self, node):
                 node.name = f"Api{node.name}"
                 self.generic_visit(node)
+
+    To inject new nodes into the schema during visitation, call
+    :meth:`emit` from any handler.  The node is added to the schema
+    registry and then visited immediately::
+
+        class AddStatusEnum(NodeVisitor):
+            def visit_APISchema(self, schema):
+                from retcon.schema.enums import Enum, EnumValue
+                extra = Enum(name="Status", values=[
+                    EnumValue(name="ACTIVE", value="active"),
+                    EnumValue(name="INACTIVE", value="inactive"),
+                ])
+                self.emit(schema, extra)   # registers + visits the new node
+                self.generic_visit(schema)
     """
 
     def visit(self, node: Node) -> None:
@@ -32,6 +51,17 @@ class NodeVisitor:
         method_name = f"visit_{type(node).__name__}"
         handler = getattr(self, method_name, self.generic_visit)
         handler(node)
+
+    def emit(self, schema: APISchema, node: Node) -> None:
+        """Add *node* to the appropriate *schema* registry and visit it.
+
+        Use this inside ``visit_*`` handlers to inject nodes that are not
+        derived from the original OpenAPI document.  The node is registered
+        via :meth:`~retcon.schema.graph.APISchema.add_node` and then
+        dispatched through :meth:`visit` so that any visitor hooks apply.
+        """
+        schema.add_node(node)
+        self.visit(node)
 
     def generic_visit(self, node: Node) -> None:
         """Recurse into every child :class:`Node` reachable from *node*."""

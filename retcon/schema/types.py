@@ -1,15 +1,44 @@
 from __future__ import annotations
 
+import msgspec
+
 from retcon.schema.nodes import Node
+
+
+class Constraints(Node, kw_only=True):
+    """Validation constraints that map to ``msgspec.Meta`` arguments.
+
+    Numeric bounds follow ``msgspec.Meta`` semantics:
+    ``gt``/``ge`` for exclusive/inclusive lower bounds,
+    ``lt``/``le`` for exclusive/inclusive upper bounds.
+    """
+
+    gt: float | None = None
+    ge: float | None = None
+    lt: float | None = None
+    le: float | None = None
+    multiple_of: float | None = None
+    pattern: str | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+
+    def is_empty(self) -> bool:
+        return all(
+            getattr(self, f.name) is None
+            for f in msgspec.structs.fields(self)
+        )
 
 
 class TypeRef(Node, kw_only=True):
     """Base class for all type references.
 
     ``nullable`` indicates that the value may also be ``None`` / ``null``.
+    ``constraints`` carries optional validation constraints; when present the
+    generator wraps the type in ``Annotated[T, msgspec.Meta(...)]``.
     """
 
     nullable: bool = False
+    constraints: Constraints | None = None
 
 
 class StringType(TypeRef, kw_only=True):
@@ -69,6 +98,7 @@ class AnyType(TypeRef, kw_only=True):
 
 
 __all__ = (
+    "Constraints",
     "TypeRef",
     "StringType",
     "IntegerType",
