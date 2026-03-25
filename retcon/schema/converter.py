@@ -374,7 +374,8 @@ def _convert_operation(
     is_webhook: bool = False,
 ) -> Operation:
     operation_level_parameters = typing.cast("list[typing.Any]", getattr(operation, "parameters", None) or [])
-    parameters = _merge_parameters(path_level_parameters, operation_level_parameters, context)
+    operation_hint = _operation_name_hint(method, path, getattr(operation, "operationId", None))
+    parameters = _merge_parameters(path_level_parameters, operation_level_parameters, context, operation_hint=operation_hint)
 
     responses: list[Response] = []
     operation_id = getattr(operation, "operationId", None)
@@ -492,12 +493,14 @@ def _merge_parameters(
     path_level_parameters: list[typing.Any],
     operation_level_parameters: list[typing.Any],
     context: _ConversionContext,
+    *,
+    operation_hint: str | None = None,
 ) -> list[Parameter]:
     merged: list[Parameter] = []
     index_by_key: dict[tuple[str, str], int] = {}
 
     for raw_parameter in [*path_level_parameters, *operation_level_parameters]:
-        parameter = _convert_parameter(raw_parameter, context)
+        parameter = _convert_parameter(raw_parameter, context, operation_hint=operation_hint)
 
         if parameter is None:
             continue
@@ -515,7 +518,7 @@ def _merge_parameters(
     return merged
 
 
-def _convert_parameter(parameter: typing.Any, context: _ConversionContext) -> Parameter | None:
+def _convert_parameter(parameter: typing.Any, context: _ConversionContext, *, operation_hint: str | None = None) -> Parameter | None:
     if parameter is None or getattr(parameter, "ref", None):
         return None
 
@@ -525,7 +528,8 @@ def _convert_parameter(parameter: typing.Any, context: _ConversionContext) -> Pa
     if not name or not location:
         return None
 
-    param_hint = _to_pascal_case_simple(name) if name else None
+    param_base_hint = _to_pascal_case_simple(name) if name else None
+    param_hint = f"{operation_hint}{param_base_hint}" if operation_hint and param_base_hint else param_base_hint
     type_ref = _to_type_ref(getattr(parameter, "schema", None), context, name_hint=param_hint)
 
     if isinstance(type_ref, AnyType):
@@ -616,6 +620,37 @@ def _pick_primary_media_type(content: dict[str, typing.Any]) -> tuple[str, typin
 
     first_content_type = next(iter(content))
     return (first_content_type, content[first_content_type])
+
+
+def _operation_name_hint(method: str, path: str, operation_id: str | None) -> str | None:
+    if operation_id:
+        return _to_pascal_case_simple(operation_id)
+
+    path_parts = [p for p in path.strip("/").split("/") if p and not p.startswith("{")]
+    path_params = [p.strip("{}") for p in path.strip("/").split("/") if p.startswith("{")]
+
+    if not path_parts and not path_params:
+        return None
+
+    if path_parts:
+        base_name = "".join(_to_pascal_case_simple(p) for p in path_parts[-2:]) if len(path_parts) >= 2 else _to_pascal_case_simple(path_parts[-1])
+    else:
+        base_name = "".join(_to_pascal_case_simple(p) for p in path_params)
+
+    if path_params and method.upper() == "GET" and path_parts:
+        base_name = base_name + "ById"
+
+    if method.upper() != "GET":
+        method_prefix_map = {
+            "POST": "Create",
+            "PUT": "Replace",
+            "PATCH": "Update",
+            "DELETE": "Delete",
+        }
+        prefix = method_prefix_map.get(method.upper(), _to_pascal_case_simple(method))
+        base_name = prefix + base_name
+
+    return base_name or None
 
 
 def _to_pascal_case_simple(name: str) -> str:
@@ -735,18 +770,18 @@ def _numeric_examples(schema: typing.Any) -> list[int | float]:
 
 def _number_without_format_is_float(schema: typing.Any) -> bool:
     numerics = _numeric_examples(schema)
-
-    if numerics:
-        return all(isinstance(v, float) for v in numerics)
-
     bounds = [
         getattr(schema, "minimum", None),
         getattr(schema, "maximum", None),
         getattr(schema, "exclusiveMinimum", None),
         getattr(schema, "exclusiveMaximum", None),
     ]
+    has_fractional_bound = any(isinstance(bound, float) and not bound.is_integer() for bound in bounds)
 
-    return any(isinstance(bound, float) and not bound.is_integer() for bound in bounds)
+    if numerics:
+        return all(isinstance(v, float) for v in numerics) or has_fractional_bound
+
+    return has_fractional_bound
 
 
 def _to_type_ref(schema: typing.Any, context: _ConversionContext, name_hint: str | None = None, field_description: str | None = None) -> TypeRef:

@@ -331,7 +331,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         self.assertIn("plain_number: int", objects_py)
         self.assertIn("example_float_number: float", objects_py)
         self.assertIn("bounded_float_number: typing.Annotated[float, msgspec.Meta(ge=1.5)]", objects_py)
-        self.assertIn("example_priority_number: typing.Annotated[int, msgspec.Meta(ge=1.5)]", objects_py)
+        self.assertIn("example_priority_number: typing.Annotated[float, msgspec.Meta(ge=1.5)]", objects_py)
         self.assertIn("float_number: msgspex.Float32", objects_py)
         self.assertIn("double_number: msgspex.Float64", objects_py)
 
