@@ -15,10 +15,10 @@ generate_app = typer.Typer(
 def _read_schema(source: str) -> bytes:
     if source.startswith("http://") or source.startswith("https://"):
         try:
-            import urllib.request
+            import niquests
 
-            with urllib.request.urlopen(source) as resp:  # noqa: S310
-                return resp.read()
+            response = niquests.get(source)
+            return response.content or b""
         except Exception as exc:
             typer.echo(f"error: failed to fetch {source!r}: {exc}", err=True)
             raise typer.Exit(1) from exc
