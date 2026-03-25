@@ -39,11 +39,11 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         self.assertIn('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])', objects_py)
         self.assertIn('user_id: UUID = msgspex.field(name="userId", converter=msgspex.From[str | UUID])', objects_py)
         self.assertIn('display_name: str = msgspex.field(name="displayName")', objects_py)
-        self.assertIn('nickname: msgspex.Option[str] = msgspex.field(default=..., converter=msgspex.From[str | None])', objects_py)
+        self.assertIn("nickname: msgspex.Option[str] = msgspex.field(default=..., converter=msgspex.From[str | None])", objects_py)
         self.assertNotIn('created_at: msgspex.isodatetime = msgspex.field(default=..., name="createdAt"', objects_py)
         self.assertNotIn('user_id: UUID = msgspex.field(default=..., name="userId"', objects_py)
         self.assertNotIn('display_name: str = msgspex.field(default=..., name="displayName")', objects_py)
-        self.assertLess(objects_py.index('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])'), objects_py.index('nickname: msgspex.Option[str] = msgspex.field(default=..., converter=msgspex.From[str | None])'))
+        self.assertLess(objects_py.index('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])'), objects_py.index("nickname: msgspex.Option[str] = msgspex.field(default=..., converter=msgspex.From[str | None])"))
 
     def test_required_dto_fields_do_not_get_ellipsis_defaults(self) -> None:
         spec = {
@@ -109,7 +109,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         self.assertIn('created_at: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime], name="createdAt")', dto_py)
         self.assertIn('display_name: str = msgspex.field(name="displayName")', dto_py)
         self.assertIn('trace_id: saronia.Header[str] | None = msgspex.field(default=None, name="traceId")', dto_py)
-        self.assertIn('nickname: str | None = None', dto_py)
+        self.assertIn("nickname: str | None = None", dto_py)
         self.assertNotIn('default=..., name="itemId"', dto_py)
         self.assertNotIn('default=..., name="clientType"', dto_py)
         self.assertNotIn('default=..., name="createdAt"', dto_py)
@@ -213,9 +213,9 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         objects_py = result.files["objects.py"]
-        plain_idx = objects_py.index("plain_name: str = msgspex.field(name=\"plainName\")")
-        created_idx = objects_py.index("created_at: msgspex.isodatetime = msgspex.field(name=\"createdAt\", converter=msgspex.From[str | datetime])")
-        user_idx = objects_py.index("user_id: UUID = msgspex.field(name=\"userId\", converter=msgspex.From[str | UUID])")
+        plain_idx = objects_py.index('plain_name: str = msgspex.field(name="plainName")')
+        created_idx = objects_py.index('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])')
+        user_idx = objects_py.index('user_id: UUID = msgspex.field(name="userId", converter=msgspex.From[str | UUID])')
         nickname_idx = objects_py.index("nickname: msgspex.Option[str] = msgspex.field(default=..., converter=msgspex.From[str | None])")
         comment_idx = objects_py.index("comment: msgspex.NullableOption[str] = msgspex.field(default=NOTHING, converter=msgspex.From[str | None])")
 
@@ -254,8 +254,8 @@ class RequiredFieldRenderingTests(unittest.TestCase):
 
         objects_py = result.files["objects.py"]
 
-        self.assertIn('uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])', objects_py)
-        self.assertIn('timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])', objects_py)
+        self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", objects_py)
+        self.assertIn("timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])", objects_py)
         self.assertIn("score: int", objects_py)
 
     def test_integer_type_is_not_changed_by_float_examples(self) -> None:
@@ -474,8 +474,8 @@ class RequiredFieldRenderingTests(unittest.TestCase):
 
         dto_py = result.files["signatures.py"]
 
-        self.assertIn('timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])', dto_py)
-        self.assertIn('uuid: saronia.Header[UUID] = msgspex.field(converter=msgspex.From[str | UUID])', dto_py)
+        self.assertIn("timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])", dto_py)
+        self.assertIn("uuid: saronia.Header[UUID] = msgspex.field(converter=msgspex.From[str | UUID])", dto_py)
 
     def test_special_date_name_uses_date_converter_in_model(self) -> None:
         spec = {
@@ -502,7 +502,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         objects_py = result.files["objects.py"]
-        self.assertIn('date: date = msgspex.field(converter=msgspex.From[str | date])', objects_py)
+        self.assertIn("date: date = msgspex.field(converter=msgspex.From[str | date])", objects_py)
 
     def test_special_uuid_name_uses_uuid_converter_in_model(self) -> None:
         spec = {
@@ -529,7 +529,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         objects_py = result.files["objects.py"]
-        self.assertIn('uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])', objects_py)
+        self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", objects_py)
 
     def test_special_date_name_uses_date_converter_in_dto(self) -> None:
         spec = {
@@ -578,7 +578,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         dto_py = result.files["signatures.py"]
-        self.assertIn('date: date = msgspex.field(converter=msgspex.From[str | date])', dto_py)
+        self.assertIn("date: date = msgspex.field(converter=msgspex.From[str | date])", dto_py)
 
     def test_special_uuid_name_uses_uuid_converter_in_dto(self) -> None:
         spec = {
@@ -627,7 +627,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         dto_py = result.files["signatures.py"]
-        self.assertIn('uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])', dto_py)
+        self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", dto_py)
 
     def test_shared_prefix_fields_are_extracted_into_signature_base_model(self) -> None:
         spec = {
@@ -760,9 +760,9 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         objects_py = result.files["objects.py"]
-        self.assertIn('uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])', objects_py)
+        self.assertIn("uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])", objects_py)
         self.assertIn('optional_uuids: msgspex.Option[list[UUID]] = msgspex.field(default=..., name="optionalUuids", converter=msgspex.From[list[str | UUID] | None])', objects_py)
-        self.assertIn('dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])', objects_py)
+        self.assertIn("dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])", objects_py)
 
     def test_list_converter_uses_inner_uuid_input_type_in_dto(self) -> None:
         spec = {
@@ -812,8 +812,8 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         )
 
         dto_py = result.files["signatures.py"]
-        self.assertIn('uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])', dto_py)
-        self.assertIn('dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])', dto_py)
+        self.assertIn("uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])", dto_py)
+        self.assertIn("dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])", dto_py)
 
     def test_controller_signatures_use_param_for_non_snake_case_names(self) -> None:
         spec = {
@@ -906,7 +906,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         controller_py = result.files["controllers/items_controller.py"]
 
         self.assertIn("@saronia.get('/', query=True)", controller_py)
-        self.assertIn("async def list_items(self, *, limit: int | None = None, offset: int | None = None, trace_id: saronia.Param[str | None, saronia.Header, \"traceId\"] = None,)", controller_py)
+        self.assertIn('async def list_items(self, *, limit: int | None = None, offset: int | None = None, trace_id: saronia.Param[str | None, saronia.Header, "traceId"] = None,)', controller_py)
         self.assertIn("limit: int | None = None", controller_py)
         self.assertIn("offset: int | None = None", controller_py)
         self.assertNotIn("limit: saronia.Query[int]", controller_py)

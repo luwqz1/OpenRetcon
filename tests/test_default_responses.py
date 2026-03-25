@@ -316,6 +316,440 @@ class DefaultResponsesTests(unittest.TestCase):
         self.assertIn("class CreateConfigProfileError(ConfigProfileBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):", errors_py)
         self.assertIn("class UpdateConfigProfileError(ConfigProfileBase, saronia.ModelStatusError[HTTPStatus.NOT_FOUND], kw_only=True):", errors_py)
 
+    def test_single_controller_inline_error_names_are_status_based_with_controller_prefix(self) -> None:
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "SettingsController_getSettings",
+                        "responses": {
+                            "400": {
+                                "description": "bad request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"message": {"type": "string"}},
+                                            "required": ["message"],
+                                        }
+                                    }
+                                },
+                            },
+                            "500": {
+                                "description": "internal error",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"message": {"type": "string"}, "traceId": {"type": "string"}},
+                                            "required": ["message", "traceId"],
+                                        }
+                                    }
+                                },
+                            },
+                        },
+                    }
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+        controller_py = result.files["controllers/settings_controller.py"]
+
+        self.assertIn("class SettingsControllerBadRequestError(", errors_py)
+        self.assertIn("class SettingsControllerInternalServerError(", errors_py)
+        self.assertNotIn("GetSettingsError2", errors_py)
+        self.assertIn("SettingsControllerBadRequestError", controller_py)
+        self.assertIn("SettingsControllerInternalServerError", controller_py)
+
+    def test_shared_inline_error_model_across_controllers_uses_plain_status_name(self) -> None:
+        inline_bad_request = {
+            "description": "bad request",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    }
+                }
+            },
+        }
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "SettingsController_getSettings",
+                        "responses": {"400": inline_bad_request},
+                    }
+                },
+                "/users": {
+                    "get": {
+                        "operationId": "UsersController_getUsers",
+                        "responses": {"400": inline_bad_request},
+                    }
+                },
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+        settings_controller_py = result.files["controllers/settings_controller.py"]
+        users_controller_py = result.files["controllers/users_controller.py"]
+
+        self.assertIn("class BadRequestError(", errors_py)
+        self.assertNotIn("class SettingsControllerBadRequestError(", errors_py)
+        self.assertNotIn("class UsersControllerBadRequestError(", errors_py)
+        self.assertIn("BadRequestError", settings_controller_py)
+        self.assertIn("BadRequestError", users_controller_py)
+
+    def test_shared_unauthorized_forbidden_inline_error_uses_auth_error_name(self) -> None:
+        auth_error = {
+            "description": "auth error",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    }
+                }
+            },
+        }
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "SettingsController_getSettings",
+                        "responses": {"401": auth_error},
+                    }
+                },
+                "/users": {
+                    "get": {
+                        "operationId": "UsersController_getUsers",
+                        "responses": {"403": auth_error},
+                    }
+                },
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+
+        self.assertIn("class AuthError(", errors_py)
+        self.assertNotIn("UnauthorizedForbiddenError", errors_py)
+
+    def test_nested_inline_models_of_renamed_inline_error_are_renamed_too(self) -> None:
+        shared_bad_request = {
+            "description": "bad request",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "errors": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {"field": {"type": "string"}},
+                                    "required": ["field"],
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "RemnawaveSettingsController_getSettings",
+                        "responses": {"400": shared_bad_request},
+                    }
+                },
+                "/users": {
+                    "get": {
+                        "operationId": "UsersController_getUsers",
+                        "responses": {"400": shared_bad_request},
+                    }
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        objects_py = result.files["objects.py"]
+        errors_py = result.files["errors.py"]
+
+        self.assertIn("class BadRequestErrorErrors(", objects_py)
+        self.assertNotIn("class RemnawaveSettingsControllerGetSettingsErrorErrors(", objects_py)
+        self.assertIn("from .objects import BadRequestErrorErrors", errors_py)
+        self.assertIn("list[BadRequestErrorErrors]", errors_py)
+
+    def test_inline_error_model_uses_response_description_as_docstring(self) -> None:
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "SettingsController_getSettings",
+                        "responses": {
+                            "400": {
+                                "description": "Bad request payload",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"message": {"type": "string"}},
+                                            "required": ["message"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+
+        self.assertIn("class SettingsControllerBadRequestError(", errors_py)
+        self.assertIn('"""Bad request payload"""', errors_py)
+
+    def test_inline_error_model_fields_use_field_descriptions_as_docstrings(self) -> None:
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/settings": {
+                    "get": {
+                        "operationId": "SettingsController_getSettings",
+                        "responses": {
+                            "400": {
+                                "description": "Bad request payload",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "message": {"type": "string", "description": "Message text"},
+                                                "errors": {
+                                                    "type": "array",
+                                                    "description": "Errors list",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "field": {"type": "string", "description": "Field name"},
+                                                        },
+                                                        "required": ["field"],
+                                                    },
+                                                },
+                                            },
+                                            "required": ["message"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+        objects_py = result.files["objects.py"]
+
+        self.assertIn('message: str\n    """Message text"""', errors_py)
+        self.assertIn("errors: msgspex.Option[list[SettingsControllerBadRequestErrorErrors]]", errors_py)
+        self.assertIn('"""Errors list"""', errors_py)
+        self.assertIn('field: str\n    """Field name"""', objects_py)
+
+    def test_error_base_model_is_extracted_from_common_subsequence_fields(self) -> None:
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "components": {
+                "schemas": {
+                    "ComponentBadRequestError": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"},
+                            "requestId": {"type": "string"},
+                            "details": {"type": "string"},
+                        },
+                        "required": ["message", "requestId", "details"],
+                    }
+                }
+            },
+            "paths": {
+                "/component": {
+                    "get": {
+                        "operationId": "ComponentController_getData",
+                        "responses": {
+                            "400": {
+                                "description": "component bad request",
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ComponentBadRequestError"}}},
+                            }
+                        },
+                    }
+                },
+                "/inline": {
+                    "get": {
+                        "operationId": "InlineController_getData",
+                        "responses": {
+                            "400": {
+                                "description": "inline bad request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "message": {"type": "string"},
+                                                "extra": {"type": "string"},
+                                                "requestId": {"type": "string"},
+                                            },
+                                            "required": ["message", "extra", "requestId"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+
+        self.assertIn("class BadRequestBase(msgspex.Model, kw_only=True):", errors_py)
+        self.assertIn("message: str", errors_py)
+        self.assertIn('request_id: str = msgspex.field(name="requestId")', errors_py)
+        self.assertIn("class ComponentBadRequestError(BadRequestBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):", errors_py)
+        self.assertIn("class InlineControllerBadRequestError(BadRequestBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):", errors_py)
+
+    def test_error_base_model_is_extracted_from_common_fields_even_with_different_order(self) -> None:
+        spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/first": {
+                    "get": {
+                        "operationId": "FirstController_getData",
+                        "responses": {
+                            "400": {
+                                "description": "bad request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "message": {"type": "string"},
+                                                "statusCode": {"type": "integer"},
+                                                "details": {"type": "string"},
+                                            },
+                                            "required": ["message", "statusCode", "details"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                "/second": {
+                    "get": {
+                        "operationId": "SecondController_getData",
+                        "responses": {
+                            "401": {
+                                "description": "unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "statusCode": {"type": "integer"},
+                                                "message": {"type": "string"},
+                                                "error": {"type": "string"},
+                                            },
+                                            "required": ["statusCode", "message", "error"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        errors_py = result.files["errors.py"]
+
+        self.assertIn("class FirstControllerBadRequestBase(msgspex.Model, kw_only=True):", errors_py)
+        self.assertIn("message: str", errors_py)
+        self.assertIn('status_code: int = msgspex.field(name="statusCode")', errors_py)
+        self.assertIn(
+            "class FirstControllerBadRequestError(FirstControllerBadRequestBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):",
+            errors_py,
+        )
+        self.assertIn(
+            "class SecondControllerUnauthorizedError(FirstControllerBadRequestBase, saronia.ModelStatusError[HTTPStatus.UNAUTHORIZED], kw_only=True):",
+            errors_py,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

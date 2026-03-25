@@ -51,6 +51,11 @@ _PYTHON_BUILTINS: typing.Final = frozenset(
         "timedelta",
     },
 )
+_STATUS_ERROR_NAME_OVERRIDES: typing.Final[dict[frozenset[str], str]] = {
+    frozenset({"401", "403"}): "AuthError",
+    frozenset({"400", "422"}): "ValidationError",
+    frozenset({"404", "410"}): "MissingResourceError",
+}
 
 
 def _raw_string(s: str) -> str:
@@ -511,6 +516,22 @@ class _Imports:
     def mark_enum_used(self) -> None:
         self._enums_used = True
 
+    def absorb(self, other: _Imports) -> None:
+        for module, names in other._stdlib.items():
+            self._stdlib[module].update(names)
+
+        for module, names in other._third_party.items():
+            self._third_party[module].update(names)
+
+        for module, names in other._local.items():
+            self._local[module].update(names)
+
+        self._bare_stdlib.update(other._bare_stdlib)
+        self._bare_third_party.update(other._bare_third_party)
+
+        if other._enums_used:
+            self._enums_used = True
+
     def render(self, *, future_annotations: bool = True) -> str:
         lines: list[str] = []
 
@@ -572,6 +593,56 @@ class PythonGenerator(ABCGenerator):
 
     _DATETIME_FORMATS: frozenset[str] = frozenset(("date-time",))
     _FLOAT_FORMATS: frozenset[str | None] = frozenset((None, "float", "float32", "float64", "double"))
+    _STRING_FORMAT_BASES: typing.Final[dict[str, str]] = {
+        "date-time": "msgspex.isodatetime",
+        "email": "msgspex.Email",
+        "idn-email": "msgspex.IDNEmail",
+        "uri": "msgspex.URI",
+        "url": "msgspex.URI",
+        "uri-reference": "msgspex.URIReference",
+        "iri": "msgspex.IRI",
+        "iri-reference": "msgspex.IRIReference",
+        "hostname": "msgspex.Hostname",
+        "idn-hostname": "msgspex.IDNHostname",
+        "ipv4": "msgspex.IPv4",
+        "ipv6": "msgspex.IPv6",
+        "json-pointer": "msgspex.JsonPointer",
+        "relative-json-pointer": "msgspex.RelativeJsonPointer",
+    }
+    _STRING_FORMAT_FROM_TYPES: typing.Final[dict[str, str]] = {
+        "email": "str | msgspex.Email",
+        "idn-email": "str | msgspex.IDNEmail",
+        "uri": "str | msgspex.URI",
+        "url": "str | msgspex.URI",
+        "uri-reference": "str | msgspex.URIReference",
+        "iri": "str | msgspex.IRI",
+        "iri-reference": "str | msgspex.IRIReference",
+        "hostname": "str | msgspex.Hostname",
+        "idn-hostname": "str | msgspex.IDNHostname",
+        "ipv4": "str | msgspex.IPv4",
+        "ipv6": "str | msgspex.IPv6",
+        "json-pointer": "str | msgspex.JsonPointer",
+        "relative-json-pointer": "str | msgspex.RelativeJsonPointer",
+    }
+    _INTEGER_FORMAT_BASES: typing.Final[dict[str, str]] = {
+        "int32": "msgspex.Int32",
+        "int64": "msgspex.Int64",
+    }
+    _INTEGER_FORMAT_FROM_TYPES: typing.Final[dict[str, str]] = {
+        "int32": "int | msgspex.Int32",
+        "int64": "int | msgspex.Int64",
+    }
+    _NUMBER_FORMAT_BASES: typing.Final[dict[str, str]] = {
+        "float": "msgspex.Float32",
+        "float32": "msgspex.Float32",
+        "double": "msgspex.Float64",
+        "float64": "msgspex.Float64",
+    }
+    _NUMBER_FORMAT_FROM_TYPES: typing.Final[dict[str, str]] = {
+        "float32": "float | msgspex.Float32",
+        "float64": "float | msgspex.Float64",
+        "double": "float | msgspex.Float64",
+    }
 
     def __init__(self, *, fmt: bool = True, module_name: str = "api") -> None:
         self._fmt = fmt
@@ -588,8 +659,10 @@ class PythonGenerator(ABCGenerator):
     def _canonical_enum_name(self, names: list[str], taken: set[str]) -> str:
         token_lists = [_to_snake_case(name).split("_") for name in names]
         shared_tokens = _longest_common_suffix(token_lists)
+
         if not shared_tokens:
             shared_tokens = _longest_common_prefix(token_lists)
+
         if not shared_tokens:
             shared_tokens = token_lists[0]
 
@@ -599,6 +672,7 @@ class PythonGenerator(ABCGenerator):
 
         name = base
         counter = 2
+
         while name in taken:
             name = f"{base}{counter}"
             counter += 1
@@ -609,12 +683,36 @@ class PythonGenerator(ABCGenerator):
         if isinstance(type_ref, EnumRef):
             mapped = enum_name_map.get(type_ref.name, type_ref.name)
             return EnumRef(name=mapped, nullable=type_ref.nullable, constraints=type_ref.constraints)
+
         if isinstance(type_ref, ArrayType):
             return ArrayType(item_type=self._rewrite_enum_ref(type_ref.item_type, enum_name_map), nullable=type_ref.nullable, constraints=type_ref.constraints)
+
         if isinstance(type_ref, MapType):
             return MapType(value_type=self._rewrite_enum_ref(type_ref.value_type, enum_name_map), nullable=type_ref.nullable, constraints=type_ref.constraints)
+
         if isinstance(type_ref, UnionType):
             return UnionType(variants=[self._rewrite_enum_ref(v, enum_name_map) for v in type_ref.variants], nullable=type_ref.nullable, constraints=type_ref.constraints)
+
+        return type_ref
+
+    def _rewrite_model_ref(self, type_ref: TypeRef, model_name_map: dict[str, str]) -> TypeRef:
+        if isinstance(type_ref, ModelRef):
+            mapped = model_name_map.get(type_ref.name, type_ref.name)
+            return ModelRef(name=mapped, nullable=type_ref.nullable, constraints=type_ref.constraints)
+
+        if isinstance(type_ref, ArrayType):
+            return ArrayType(item_type=self._rewrite_model_ref(type_ref.item_type, model_name_map), nullable=type_ref.nullable, constraints=type_ref.constraints)
+
+        if isinstance(type_ref, MapType):
+            return MapType(value_type=self._rewrite_model_ref(type_ref.value_type, model_name_map), nullable=type_ref.nullable, constraints=type_ref.constraints)
+
+        if isinstance(type_ref, UnionType):
+            return UnionType(
+                variants=[self._rewrite_model_ref(v, model_name_map) for v in type_ref.variants],
+                nullable=type_ref.nullable,
+                constraints=type_ref.constraints,
+            )
+
         return type_ref
 
     def _deduplicate_enums(self, schema: APISchema) -> APISchema:
@@ -643,6 +741,7 @@ class PythonGenerator(ABCGenerator):
             canonical_name = self._canonical_enum_name([enum.name for enum in group], reserved_names)
             reserved_names.add(canonical_name)
             deduped_enums.append(SchemaEnum(name=canonical_name, values=group[0].values, description=group[0].description))
+
             for enum in group:
                 enum_name_map[enum.name] = canonical_name
 
@@ -670,6 +769,7 @@ class PythonGenerator(ABCGenerator):
         rewritten_endpoints: list[Endpoint] = []
         for endpoint in schema.endpoints:
             rewritten_ops: list[Operation] = []
+
             for op in endpoint.operations:
                 rewritten_ops.append(
                     Operation(
@@ -713,6 +813,7 @@ class PythonGenerator(ABCGenerator):
                         security_requirements=op.security_requirements,
                     )
                 )
+
             rewritten_endpoints.append(Endpoint(path=endpoint.path, operations=rewritten_ops, description=endpoint.description))
 
         rewritten_named_responses = [
@@ -745,6 +846,27 @@ class PythonGenerator(ABCGenerator):
         default_sig = "__UNSET__" if field.default is msgspec.UNSET else repr(field.default)
         return (field.name, repr(field.type), field.required, field.description, default_sig, field.deprecated)
 
+    @staticmethod
+    def _append_docstring_block(lines: list[str], text: str, *, indent: str = "    ", trailing_blank: bool = True) -> None:
+        desc_lines = [line for line in text.split("\n") if line.strip()]
+        if not desc_lines:
+            return
+
+        if len(desc_lines) == 1:
+            lines.append(f'{indent}"""{desc_lines[0].strip()}"""')
+        else:
+            lines.append(f'{indent}"""{desc_lines[0]}')
+            for desc_line in desc_lines[1:]:
+                lines.append(f"{indent}{desc_line}")
+            lines.append(f'{indent}"""')
+
+        if trailing_blank:
+            lines.append("")
+
+    @staticmethod
+    def _format_method_params(params: list[str]) -> str:
+        return ", ".join(["self", "*", *params[1:]]) + "," if len(params) > 1 else "self"
+
     def _shared_base_name(self, model_names: list[str], reserved: set[str]) -> str:
         token_lists = [_to_snake_case(name).split("_") for name in model_names]
         generic_tail = {"response", "responses", "dto", "error", "errors", "model", "models", "object", "objects", "signature"}
@@ -752,27 +874,37 @@ class PythonGenerator(ABCGenerator):
 
         def trim_tokens(tokens: list[str]) -> list[str]:
             trimmed = list(tokens)
+
             while trimmed and trimmed[-1] in generic_tail:
                 trimmed.pop()
+
             while len(trimmed) > 1 and trimmed[-1] == "controller":
                 trimmed.pop()
+
             while len(trimmed) > 1 and trimmed[0] in generic_head:
                 trimmed.pop(0)
+
             return trimmed
 
         shared_tokens = trim_tokens(_longest_common_suffix(token_lists))
+
         if not shared_tokens:
             shared_tokens = trim_tokens(_longest_common_prefix(token_lists))
+
         if not shared_tokens:
             shared_tokens = trim_tokens(token_lists[0])
+
         if not shared_tokens:
             shared_tokens = token_lists[0]
+
         base = _to_pascal_case("_".join(shared_tokens)) + "Base"
         name = base
         counter = 2
+
         while name in reserved:
             name = f"{base}{counter}"
             counter += 1
+
         return name
 
     def _extract_model_bases(self, models: list[Model]) -> tuple[list[Model], list[Model], dict[str, str]]:
@@ -785,6 +917,7 @@ class PythonGenerator(ABCGenerator):
 
         for model in models:
             signatures = signatures_by_name[model.name]
+
             for size in range(2, len(signatures) + 1):
                 prefix_groups[tuple(signatures[:size])].append(model.name)
 
@@ -799,8 +932,10 @@ class PythonGenerator(ABCGenerator):
                 for prefix, names in candidates.items()
                 if model.name in names
             ]
+
             if not options:
                 continue
+
             options.sort(key=lambda item: (len(item[0]), len(item[1])), reverse=True)
             chosen_by_model[model.name] = options[0]
 
@@ -817,25 +952,124 @@ class PythonGenerator(ABCGenerator):
         for prefix, model_names in grouped.items():
             if len(model_names) < 2:
                 continue
+
             base_name = self._shared_base_name(sorted(model_names), reserved_names)
             reserved_names.add(base_name)
             group_to_base[prefix] = base_name
             source_model = model_by_name[model_names[0]]
             prefix_len = len(prefix)
             bases.append(Model(name=base_name, fields=source_model.fields[:prefix_len], description=None, deprecated=False))
+
             for model_name in model_names:
                 model_bases[model_name] = base_name
 
         for model in models:
             base_name = model_bases.get(model.name)
+
             if not base_name:
                 rewritten_models.append(model)
                 continue
+
             prefix_len = len(chosen_by_model[model.name][0])
             rewritten_models.append(
                 Model(
                     name=model.name,
                     fields=model.fields[prefix_len:],
+                    description=model.description,
+                    deprecated=model.deprecated,
+                )
+            )
+
+        return bases, rewritten_models, model_bases
+
+    def _extract_model_bases_by_field_set(self, models: list[Model]) -> tuple[list[Model], list[Model], dict[str, str]]:
+        if len(models) < 2:
+            return [], models, {}
+
+        model_by_name = {model.name: model for model in models}
+        signatures_by_name = {model.name: [self._field_signature(field) for field in model.fields] for model in models}
+        candidates: dict[tuple[tuple[object, ...], ...], list[str]] = {}
+        model_names = list(model_by_name)
+
+        for left_idx, left_name in enumerate(model_names):
+            for right_name in model_names[left_idx + 1 :]:
+                right_set = set(signatures_by_name[right_name])
+                common = tuple(sig for sig in signatures_by_name[left_name] if sig in right_set)
+
+                if len(common) < 2:
+                    continue
+
+                matching = [
+                    name
+                    for name, field_signatures in signatures_by_name.items()
+                    if all(item in field_signatures for item in common)
+                ]
+
+                if len(matching) < 2:
+                    continue
+
+                existing = candidates.get(common)
+
+                if existing is None or len(matching) > len(existing):
+                    candidates[common] = matching
+
+        if not candidates:
+            return [], models, {}
+
+        chosen_by_model: dict[str, tuple[tuple[tuple[object, ...], ...], list[str]]] = {}
+        for name in model_names:
+            options = [
+                (sequence, sorted(set(names)))
+                for sequence, names in candidates.items()
+                if name in names
+            ]
+
+            if not options:
+                continue
+
+            options.sort(key=lambda item: (len(item[0]), len(item[1])), reverse=True)
+            chosen_by_model[name] = options[0]
+
+        grouped: dict[tuple[tuple[object, ...], ...], list[str]] = defaultdict(list)
+        for model_name, (sequence, _) in chosen_by_model.items():
+            grouped[sequence].append(model_name)
+
+        bases: list[Model] = []
+        rewritten_models: list[Model] = []
+        model_bases: dict[str, str] = {}
+        chosen_field_sets: dict[str, tuple[tuple[object, ...], ...]] = {}
+        reserved_names = {model.name for model in models}
+
+        for field_set, grouped_model_names in grouped.items():
+            if len(grouped_model_names) < 2:
+                continue
+
+            base_name = self._shared_base_name(sorted(grouped_model_names), reserved_names)
+            reserved_names.add(base_name)
+            field_set_items = set(field_set)
+            source_fields = model_by_name[grouped_model_names[0]].fields
+            base_fields = [field for field in source_fields if self._field_signature(field) in field_set_items]
+
+            bases.append(Model(name=base_name, fields=base_fields, description=None, deprecated=False))
+
+            for model_name in grouped_model_names:
+                model_bases[model_name] = base_name
+                chosen_field_sets[model_name] = field_set
+
+        for model in models:
+            field_set = chosen_field_sets.get(model.name)
+
+            if not field_set:
+                rewritten_models.append(model)
+                continue
+
+            field_set_items = set(field_set)
+            remaining_fields = [field for field in model.fields if self._field_signature(field) not in field_set_items]
+
+            rewritten_models.append(
+                Model(
+                    name=model.name,
+                    fields=remaining_fields,
                     description=model.description,
                     deprecated=model.deprecated,
                 )
@@ -877,6 +1111,7 @@ class PythonGenerator(ABCGenerator):
                         signatures_by_name[right_name],
                     )
                 )
+
                 if len(common) < 2:
                     continue
 
@@ -885,6 +1120,7 @@ class PythonGenerator(ABCGenerator):
                     for name, field_signatures in signatures_by_name.items()
                     if is_subsequence(common, field_signatures)
                 ]
+
                 if len(matching) < 2:
                     continue
 
@@ -902,8 +1138,10 @@ class PythonGenerator(ABCGenerator):
                 for prefix, names in candidates.items()
                 if name in names
             ]
+
             if not options:
                 continue
+
             options.sort(key=lambda item: (len(item[0]), len(item[1])), reverse=True)
             chosen_by_signature[name] = options[0]
 
@@ -920,12 +1158,14 @@ class PythonGenerator(ABCGenerator):
         for sequence, grouped_signature_names in grouped.items():
             if len(grouped_signature_names) < 2:
                 continue
+
             base_name = self._shared_base_name(sorted(grouped_signature_names), reserved_names)
             reserved_names.add(base_name)
             base_fields: list[_SignatureFieldSpec] = []
             source_fields = field_lookup[grouped_signature_names[0]]
             sequence_items = list(sequence)
             seq_index = 0
+
             for field in source_fields:
                 if seq_index < len(sequence_items) and self._signature_field_signature(field) == sequence_items[seq_index]:
                     base_fields.append(field)
@@ -940,6 +1180,7 @@ class PythonGenerator(ABCGenerator):
 
         for name, spec in signatures.items():
             sequence = chosen_sequences.get(name)
+
             if not sequence:
                 rewritten_fields[name] = spec.fields
                 continue
@@ -947,6 +1188,7 @@ class PythonGenerator(ABCGenerator):
             remaining_fields: list[_SignatureFieldSpec] = []
             sequence_items = list(sequence)
             seq_index = 0
+
             for field in spec.fields:
                 if seq_index < len(sequence_items) and self._signature_field_signature(field) == sequence_items[seq_index]:
                     seq_index += 1
@@ -957,6 +1199,252 @@ class PythonGenerator(ABCGenerator):
 
         return bases, rewritten_fields, model_bases
 
+    def _controller_class_name(self, group: str, operations: list[Operation], route_prefix: str) -> str:
+        base_path = _infer_controller_base_path(operations)
+        relative_base = _route_path_with_snake_case_params(_relative_path(route_prefix, base_path))
+        base_parts = [p for p in relative_base.strip("/").split("/") if p and not p.startswith("{")]
+
+        if base_parts:
+            controller_base_name = "_".join(base_parts)
+            return _to_pascal_case(controller_base_name) + "Controller"
+
+        return "APIController" if group == "default" else _to_pascal_case(group).removeprefix("Controller") + "Controller"
+
+    @staticmethod
+    def _inline_error_base_name(statuses: set[str]) -> str:
+        if not statuses:
+            return "Error"
+
+        status_key = frozenset(statuses)
+        if status_key in _STATUS_ERROR_NAME_OVERRIDES:
+            return _STATUS_ERROR_NAME_OVERRIDES[status_key]
+
+        parts: list[str] = []
+        for status in sorted(statuses):
+            status_name = _status_code_to_name(status)
+
+            if status_name.endswith("Error"):
+                status_name = status_name.removesuffix("Error")
+
+            parts.append(status_name)
+
+        base = "".join(parts) or "Error"
+        return base if base.endswith("Error") else f"{base}Error"
+
+    def _rename_inline_error_models(self, schema: APISchema, route_prefix: str) -> APISchema:
+        error_statuses = self._collect_error_statuses(schema)
+        candidate_names = {name for name in error_statuses if "Controller" in name and re.search(r"Error\d*$", name)}
+
+        if not candidate_names:
+            return schema
+
+        groups: dict[str, list[Operation]] = defaultdict(list)
+        for endpoint in schema.endpoints:
+            for op in endpoint.operations:
+                group = op.tags[0] if op.tags else _path_to_group(endpoint.path)
+                groups[group].append(op)
+
+        model_controllers: dict[str, set[str]] = defaultdict(set)
+        for group, operations in groups.items():
+            controller_name = self._controller_class_name(group, operations, route_prefix)
+
+            for op in operations:
+                for resp in op.responses:
+                    if not _is_error_status(resp.status_code):
+                        continue
+
+                    for type_ref in resp.content.values():
+                        if isinstance(type_ref, ModelRef) and type_ref.name in candidate_names:
+                            model_controllers[type_ref.name].add(controller_name)
+
+        base_names = {name: self._inline_error_base_name(error_statuses.get(name, set())) for name in candidate_names}
+        proposed_names: dict[str, str] = {}
+
+        for name in sorted(candidate_names):
+            controllers = sorted(model_controllers.get(name, set()))
+            base_name = base_names[name]
+
+            if len(controllers) == 1:
+                proposed_names[name] = f"{controllers[0]}{base_name}"
+            else:
+                proposed_names[name] = base_name
+
+        grouped_by_name: dict[str, list[str]] = defaultdict(list)
+
+        for old_name, new_name in proposed_names.items():
+            grouped_by_name[new_name].append(old_name)
+
+        for _, old_names in list(grouped_by_name.items()):
+            if len(old_names) < 2:
+                continue
+            for old_name in old_names:
+                controllers = sorted(model_controllers.get(old_name, set()))
+                if controllers:
+                    proposed_names[old_name] = f"{controllers[0]}{base_names[old_name]}"
+                else:
+                    proposed_names[old_name] = old_name
+
+        final_names: dict[str, str] = {}
+        used_names: set[str] = {model.name for model in schema.models if model.name not in candidate_names}
+
+        for old_name in sorted(candidate_names):
+            base_name = proposed_names[old_name]
+            new_name = base_name
+            counter = 2
+
+            while new_name in used_names:
+                if base_name != old_name:
+                    new_name = old_name if old_name not in used_names else f"{base_name}{counter}"
+                else:
+                    new_name = f"{base_name}{counter}"
+                    counter += 1
+
+            used_names.add(new_name)
+            final_names[old_name] = new_name
+
+        expanded_names = dict(final_names)
+        model_names = {model.name for model in schema.models}
+
+        for old_name, new_name in list(final_names.items()):
+            for model_name in sorted(model_names):
+                if model_name == old_name or not model_name.startswith(old_name):
+                    continue
+
+                suffix = model_name[len(old_name) :]
+                if not suffix or not suffix[0].isupper():
+                    continue
+
+                candidate_name = f"{new_name}{suffix}"
+                unique_name = candidate_name
+                counter = 2
+
+                while unique_name in used_names or unique_name in expanded_names.values():
+                    unique_name = f"{candidate_name}{counter}"
+                    counter += 1
+
+                used_names.add(unique_name)
+                expanded_names[model_name] = unique_name
+
+        if all(old_name == new_name for old_name, new_name in expanded_names.items()):
+            return schema
+
+        rewritten_models: list[Model] = []
+
+        for model in schema.models:
+            renamed_fields = [
+                Field(
+                    name=field.name,
+                    type=self._rewrite_model_ref(field.type, expanded_names),
+                    required=field.required,
+                    description=field.description,
+                    default=field.default,
+                    deprecated=field.deprecated,
+                )
+                for field in model.fields
+            ]
+
+            rewritten_models.append(
+                Model(
+                    name=expanded_names.get(model.name, model.name),
+                    fields=renamed_fields,
+                    description=model.description,
+                    deprecated=model.deprecated,
+                )
+            )
+
+        rewritten_endpoints: list[Endpoint] = []
+
+        for endpoint in schema.endpoints:
+            rewritten_operations: list[Operation] = []
+
+            for op in endpoint.operations:
+                rewritten_responses: list[Response] = []
+
+                for resp in op.responses:
+                    rewritten_content = {
+                        content_type: self._rewrite_model_ref(type_ref, expanded_names)
+                        for content_type, type_ref in resp.content.items()
+                    }
+                    rewritten_responses.append(
+                        Response(
+                            status_code=resp.status_code,
+                            description=resp.description,
+                            content=rewritten_content,
+                            component_response_ref=resp.component_response_ref,
+                        )
+                    )
+
+                request_body = op.request_body
+                rewritten_request_body = None
+
+                if request_body is not None:
+                    rewritten_request_body = RequestBody(
+                        content_type=request_body.content_type,
+                        type=self._rewrite_model_ref(request_body.type, expanded_names),
+                        required=request_body.required,
+                        description=request_body.description,
+                    )
+
+                rewritten_parameters = [
+                    Parameter(
+                        name=param.name,
+                        location=param.location,
+                        type=self._rewrite_model_ref(param.type, expanded_names),
+                        required=param.required,
+                        description=param.description,
+                        deprecated=param.deprecated,
+                    )
+                    for param in op.parameters
+                ]
+
+                rewritten_operations.append(
+                    Operation(
+                        method=op.method,
+                        path=op.path,
+                        operation_id=op.operation_id,
+                        summary=op.summary,
+                        description=op.description,
+                        tags=op.tags,
+                        parameters=rewritten_parameters,
+                        request_body=rewritten_request_body,
+                        responses=rewritten_responses,
+                        deprecated=op.deprecated,
+                        security_requirements=op.security_requirements,
+                    )
+                )
+
+            rewritten_endpoints.append(Endpoint(path=endpoint.path, operations=rewritten_operations, description=endpoint.description))
+
+        rewritten_named_responses: list[NamedResponse] = []
+
+        for named_response in schema.named_responses:
+            rewritten_named_responses.append(
+                NamedResponse(
+                    name=named_response.name,
+                    status_codes=named_response.status_codes,
+                    description=named_response.description,
+                    content={
+                        content_type: self._rewrite_model_ref(type_ref, expanded_names)
+                        for content_type, type_ref in named_response.content.items()
+                    },
+                    schema_ref=expanded_names.get(named_response.schema_ref, named_response.schema_ref) if named_response.schema_ref else None,
+                )
+            )
+
+        return APISchema(
+            title=schema.title,
+            version=schema.version,
+            description=schema.description,
+            servers=schema.servers,
+            models=rewritten_models,
+            enums=schema.enums,
+            endpoints=rewritten_endpoints,
+            webhooks=schema.webhooks,
+            named_responses=rewritten_named_responses,
+            security_schemes=schema.security_schemes,
+            custom_nodes=schema.custom_nodes,
+        )
+
     def generate(self, schema: APISchema) -> dict[str, str]:
         schema = self._deduplicate_enums(schema)
         files: dict[str, str] = {}
@@ -965,6 +1453,7 @@ class PythonGenerator(ABCGenerator):
         self._controller_classes = {}
 
         route_prefix = self._extract_route_prefix(schema)
+        schema = self._rename_inline_error_models(schema, route_prefix)
         response_statuses = self._collect_response_statuses(schema)  # 2xx
         error_statuses = self._collect_error_statuses(schema)  # 3xx-5xx
         response_names = set(response_statuses)
@@ -972,6 +1461,7 @@ class PythonGenerator(ABCGenerator):
         inlined_request_body_names = self._collect_inlined_request_body_models(schema)
 
         enums = [*schema.enums]
+
         for node in schema.custom_nodes:
             if isinstance(node, SchemaEnum):
                 enums.append(node)
@@ -997,6 +1487,7 @@ class PythonGenerator(ABCGenerator):
                 response_models.append(node)
 
         response_named = []
+
         for nr in schema.named_responses:
             if nr.status_codes and any(_is_success_status(sc) or sc.startswith("3") for sc in nr.status_codes):
                 response_named.append(nr)
@@ -1009,16 +1500,20 @@ class PythonGenerator(ABCGenerator):
             files["responses.py"] = self._generate_responses_file(response_models, response_named)
 
         error_models = [m for m in schema.models if m.name in error_names]
+
         for node in schema.custom_nodes:
             if isinstance(node, Model) and node.name in error_names:
                 error_models.append(node)
 
         error_named = []
+
         for nr in schema.named_responses:
             if nr.status_codes and any(sc.startswith(("4", "5")) for sc in nr.status_codes):
                 error_named.append(nr)
+
             elif not nr.status_codes:
                 inferred = _infer_status_code_from_name(nr.name)
+
                 if inferred and inferred.startswith(("4", "5")):
                     error_named.append(nr)
 
@@ -1093,8 +1588,10 @@ class PythonGenerator(ABCGenerator):
             if isinstance(scheme, HttpScheme):
                 if scheme.scheme.lower() == "bearer":
                     auth_classes.append(f"{class_name} = HTTPBearer")
+
                 elif scheme.scheme.lower() == "basic":
                     auth_classes.append(f"{class_name} = HTTPBasic")
+
                 else:
                     other_class_name = _to_pascal_case(scheme.scheme.replace("/", "_").replace("-", "_").replace(" ", "_"))
                     lines.append("")
@@ -1280,7 +1777,7 @@ class PythonGenerator(ABCGenerator):
 
         parts = [self._render_model(m, imports) for m in base_models]
         parts.extend(self._render_model(m, imports, base=model_bases.get(m.name, "msgspex.Model")) for m in rewritten_models)
-        all_decl = _render_all([m.name for m in base_models] + [m.name for m in rewritten_models])
+        all_decl = _render_all([m.name for m in rewritten_models])
         return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
 
     def _generate_parameters_file(self) -> str:
@@ -1291,23 +1788,7 @@ class PythonGenerator(ABCGenerator):
         rendered_parts: list[str] = []
 
         for spec in self._parameter_dtos.values():
-            dto_imports = spec.imports
-            for module, names in dto_imports._stdlib.items():
-                for name in names:
-                    imports.stdlib(module, name)
-
-            for module, names in dto_imports._third_party.items():
-                for name in names:
-                    imports.third_party(module, name)
-
-            for module in dto_imports._bare_stdlib:
-                imports.bare_stdlib(module)
-
-            for module in dto_imports._bare_third_party:
-                imports.bare_third_party(module)
-
-            if dto_imports._enums_used:
-                imports.mark_enum_used()
+            imports.absorb(spec.imports)
 
         base_signatures, rewritten_fields, model_bases = self._extract_signature_bases(self._parameter_dtos)
         for base_name, fields in base_signatures:
@@ -1323,7 +1804,7 @@ class PythonGenerator(ABCGenerator):
                 )
             )
 
-        all_decl = _render_all([name for name, _ in base_signatures] + list(self._parameter_dtos.keys()))
+        all_decl = _render_all(list(self._parameter_dtos.keys()))
         return imports.render() + "\n\n" + "\n\n\n".join(rendered_parts) + all_decl + "\n"
 
     def _generate_responses_file(self, models: list[Model], named_responses: list[NamedResponse]) -> str:
@@ -1341,7 +1822,7 @@ class PythonGenerator(ABCGenerator):
             parts = [self._render_model(m, imports) for m in base_models]
             parts.extend(self._render_model(m, imports, base=model_bases.get(m.name, "msgspex.Model")) for m in rewritten_models)
             parts.extend(self._render_named_response(nr, imports, is_error=False) for nr in named_responses)
-            all_names = [m.name for m in base_models] + [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
+            all_names = [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
             all_decl = _render_all(all_names)
             return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
         finally:
@@ -1358,7 +1839,7 @@ class PythonGenerator(ABCGenerator):
         imports.stdlib("http", "HTTPStatus")
         imports.bare_third_party("msgspex")
         imports.bare_third_party("saronia")
-        base_models, rewritten_models, model_bases = self._extract_model_bases(models)
+        base_models, rewritten_models, model_bases = self._extract_model_bases_by_field_set(models)
 
         error_names = {m.name for m in rewritten_models}
         error_names.update(nr.name for nr in named_responses)
@@ -1369,7 +1850,7 @@ class PythonGenerator(ABCGenerator):
             parts = [self._render_model(m, imports) for m in base_models]
             parts.extend(self._render_error_model(m, error_statuses.get(m.name, set()), imports, data_base=model_bases.get(m.name)) for m in rewritten_models)
             parts.extend(self._render_named_response(nr, imports, is_error=True) for nr in named_responses)
-            all_names = [m.name for m in base_models] + [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
+            all_names = [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
             all_decl = _render_all(all_names)
             return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
         finally:
@@ -1384,6 +1865,7 @@ class PythonGenerator(ABCGenerator):
         route_prefix: str,
     ) -> dict[str, str]:
         groups: dict[str, list[Operation]] = defaultdict(list)
+
         for endpoint in schema.endpoints:
             for op in endpoint.operations:
                 group = op.tags[0] if op.tags else _path_to_group(endpoint.path)
@@ -1420,13 +1902,7 @@ class PythonGenerator(ABCGenerator):
         try:
             base_path = _infer_controller_base_path(operations)
             relative_base = _route_path_with_snake_case_params(_relative_path(route_prefix, base_path))
-            base_parts = [p for p in relative_base.strip("/").split("/") if p and not p.startswith("{")]
-
-            if base_parts:
-                controller_base_name = "_".join(base_parts)
-                class_name = _to_pascal_case(controller_base_name) + "Controller"
-            else:
-                class_name = "APIController" if group == "default" else _to_pascal_case(group).removeprefix("Controller") + "Controller"
+            class_name = self._controller_class_name(group, operations, route_prefix)
 
             controller_auth: str | None = None
             auth_alias: str | None = None
@@ -1624,8 +2100,10 @@ class PythonGenerator(ABCGenerator):
                 return f"deprecated_{py_name}_: dataclasses.InitVar[{type_str}] = msgspex.field(default={default_repr}{json_name_arg}, converter={_from(from_type)})"
 
             field_args = f"converter={_from(from_type)}"
+
             if json_name_arg:
                 field_args = f'name="{field.name if py_name != field.name else py_name}", ' + field_args
+
             return f"deprecated_{py_name}_: dataclasses.InitVar[{type_str}] = msgspex.field({field_args})"
 
         if field.default is not msgspec.UNSET:
@@ -1638,6 +2116,7 @@ class PythonGenerator(ABCGenerator):
 
     def _render_deprecated_property(self, field: Field, model_name: str, imports: _Imports) -> str:
         py_name = _to_snake_case(field.name)
+
         if keyword.iskeyword(py_name):
             py_name = py_name + "_"
 
@@ -1646,11 +2125,13 @@ class PythonGenerator(ABCGenerator):
 
         if hint is not None:
             base, _ = hint
+
             if field.type.constraints is not None and not field.type.constraints.is_empty():
                 imports.bare_stdlib("typing")
                 imports.bare_third_party("msgspec")
                 meta_args = self._render_meta_args(field.type.constraints)
                 base = f"typing.Annotated[{base}, msgspec.Meta({meta_args})]"
+
             type_str = f"{base} | None" if field.type.nullable else base
         else:
             type_str = self._type_str(field.type, imports)
@@ -1661,6 +2142,7 @@ class PythonGenerator(ABCGenerator):
                 type_str = f"msgspex.NullableOption[{option_inner_type}]"
             else:
                 type_str = f"msgspex.Option[{type_str}]"
+
         elif field.type.nullable and hint is not None:
             nullable_inner_type = base if hint is not None else self._type_str(field.type, imports, strip_nullable=True)
             type_str = f"msgspex.NullableOption[{nullable_inner_type}]"
@@ -1707,8 +2189,7 @@ class PythonGenerator(ABCGenerator):
         lines.append(f"class {model.name}({base}, kw_only=True):")
 
         if model.description:
-            lines.append(f'    """{model.description}"""')
-            lines.append("")
+            self._append_docstring_block(lines, model.description)
 
         if not model.fields:
             lines.append("    pass")
@@ -1721,17 +2202,7 @@ class PythonGenerator(ABCGenerator):
                 lines.append("    " + self._render_field(field, imports))
 
                 if field.description:
-                    desc_lines = [line for line in field.description.split("\n") if line.strip()]
-
-                    if len(desc_lines) == 1:
-                        lines.append(f'    """{field.description.strip()}"""')
-                    else:
-                        lines.append(f'    """{desc_lines[0]}')
-                        for desc_line in desc_lines[1:]:
-                            lines.append(f"    {desc_line}")
-                        lines.append('    """')
-
-                    lines.append("")
+                    self._append_docstring_block(lines, field.description)
 
             if deprecated_fields:
                 imports.bare_stdlib("dataclasses")
@@ -1741,18 +2212,7 @@ class PythonGenerator(ABCGenerator):
                     lines.append("    " + self._render_deprecated_initvar_field(field, imports))
 
                     if field.description:
-                        desc_lines = [line for line in field.description.split("\n") if line.strip()]
-
-                        if len(desc_lines) == 1:
-                            lines.append(f'    """{field.description.strip()}"""')
-                        else:
-                            lines.append(f'    """{desc_lines[0]}')
-
-                            for desc_line in desc_lines[1:]:
-                                lines.append(f"    {desc_line}")
-                            lines.append('    """')
-
-                        lines.append("")
+                        self._append_docstring_block(lines, field.description)
 
                 lines.append("")
 
@@ -1830,8 +2290,7 @@ class PythonGenerator(ABCGenerator):
         lines.append(f"class {model.name}({base}, kw_only=True):")
 
         if model.description:
-            lines.append(f'    """{model.description}"""')
-            lines.append("")
+            self._append_docstring_block(lines, model.description)
 
         if not model.fields:
             lines.append("    pass")
@@ -1842,18 +2301,7 @@ class PythonGenerator(ABCGenerator):
                 lines.append("    " + self._render_field(field, imports))
 
                 if field.description:
-                    desc_lines = [line for line in field.description.split("\n") if line.strip()]
-
-                    if len(desc_lines) == 1:
-                        lines.append(f'    """{field.description.strip()}"""')
-                    else:
-                        lines.append(f'    """{desc_lines[0]}')
-
-                        for desc_line in desc_lines[1:]:
-                            lines.append(f"    {desc_line}")
-                        lines.append('    """')
-
-                    lines.append("")
+                    self._append_docstring_block(lines, field.description)
 
         return "\n".join(lines)
 
@@ -1905,7 +2353,7 @@ class PythonGenerator(ABCGenerator):
         lines: list[str] = [f"class {named_response.name}({base_str}, kw_only=True):"]
 
         if named_response.description:
-            lines.append(f'    """{named_response.description}"""')
+            self._append_docstring_block(lines, named_response.description, trailing_blank=False)
 
         lines.append("    pass")
 
@@ -2037,8 +2485,10 @@ class PythonGenerator(ABCGenerator):
                 return f"{py_name}: {type_str} = msgspex.field(default={default_repr}{json_name_arg}, converter={_from(from_type)})"
 
             field_args = f"converter={_from(from_type)}"
+
             if json_name_lead:
                 field_args = json_name_lead + field_args
+
             return f"{py_name}: {type_str} = msgspex.field({field_args})"
 
         if field.default is not msgspec.UNSET:
@@ -2201,13 +2651,14 @@ class PythonGenerator(ABCGenerator):
 
         success_type = self._get_success_type(op.responses, imports)
         error_parts = self._get_error_types(op.responses, imports, method_name or _operation_to_method_name(op, base_path), inline_error_class_plan)
+
         if error_parts:
             error_union = " | ".join(error_parts)
             return_type = f"saronia.APIResult[{success_type}, {error_union},]" if len(error_parts) > 1 else f"saronia.APIResult[{success_type}, {error_union}]"
         else:
             return_type = f"saronia.APIResult[{success_type}]"
 
-        params_str = ", ".join(["self", "*", *func_params[1:]]) + ("," if len(func_params) > 1 else "self")
+        params_str = self._format_method_params(func_params)
         decorators: list[str] = []
 
         if op.deprecated:
@@ -2288,59 +2739,20 @@ class PythonGenerator(ABCGenerator):
         if isinstance(type_ref, StringType):
             fmt = type_ref.format
 
-            if fmt == "date-time":
-                base = "msgspex.isodatetime"
-            elif fmt == "date":
+            if fmt == "date":
                 add_stdlib("datetime", "date")
                 base = "date"
             elif fmt == "uuid":
                 add_stdlib("uuid", "UUID")
                 base = "UUID"
-            elif fmt == "email":
-                base = "msgspex.Email"
-            elif fmt == "idn-email":
-                base = "msgspex.IDNEmail"
-            elif fmt in ("uri", "url"):
-                base = "msgspex.URI"
-            elif fmt == "uri-reference":
-                base = "msgspex.URIReference"
-            elif fmt == "iri":
-                base = "msgspex.IRI"
-            elif fmt == "iri-reference":
-                base = "msgspex.IRIReference"
-            elif fmt == "hostname":
-                base = "msgspex.Hostname"
-            elif fmt == "idn-hostname":
-                base = "msgspex.IDNHostname"
-            elif fmt == "ipv4":
-                base = "msgspex.IPv4"
-            elif fmt == "ipv6":
-                base = "msgspex.IPv6"
-            elif fmt == "json-pointer":
-                base = "msgspex.JsonPointer"
-            elif fmt == "relative-json-pointer":
-                base = "msgspex.RelativeJsonPointer"
             else:
-                base = "str"
+                base = self._STRING_FORMAT_BASES.get(fmt or "", "str")
 
         elif isinstance(type_ref, IntegerType):
-            fmt = type_ref.format
-            if fmt == "int32":
-                base = "msgspex.Int32"
-            elif fmt == "int64":
-                base = "msgspex.Int64"
-            else:
-                base = "int"
+            base = self._INTEGER_FORMAT_BASES.get(type_ref.format or "", "int")
 
         elif isinstance(type_ref, NumberType):
-            fmt = type_ref.format
-
-            if fmt in ("float", "float32"):
-                base = "msgspex.Float32"
-            elif fmt in ("double", "float64"):
-                base = "msgspex.Float64"
-            else:
-                base = "float"
+            base = self._NUMBER_FORMAT_BASES.get(type_ref.format or "", "float")
 
         elif isinstance(type_ref, BooleanType):
             base = "bool"
@@ -2360,19 +2772,23 @@ class PythonGenerator(ABCGenerator):
 
         elif isinstance(type_ref, ModelRef):
             base = type_ref.name
+
             if imports is not None and self._controller_response_names is not None and self._controller_error_names is not None:
                 if base in self._controller_error_names:
                     module = "..errors"
+
                 elif base in self._controller_response_names:
                     module = "..responses"
+
                 else:
                     module = "..objects"
 
-                # Adjust module path for responses.py and errors.py (they use .objects not ..objects)
                 if module == "..objects" and imports._enums_module == ".enums":
                     module = ".objects"
+
                 elif module == "..responses" and imports._enums_module == ".enums":
                     module = ".responses"
+
                 elif module == "..errors" and imports._enums_module == ".enums":
                     module = ".errors"
 
@@ -2407,89 +2823,35 @@ class PythonGenerator(ABCGenerator):
         return " | ".join(parts)
 
     def _from_input_type(self, type_ref: TypeRef, imports: _Imports | None) -> str | None:
-        def add_tp(module: str, name: str) -> None:
-            if imports is not None:
-                imports.third_party(module, name)
+        imports = imports or _Imports()
 
         if isinstance(type_ref, ModelRef) and type_ref.name == "UUID":
-            if imports is not None:
-                imports.stdlib("uuid", "UUID")
+            imports.stdlib("uuid", "UUID")
             return "str | UUID"
 
         if isinstance(type_ref, StringType):
             fmt = type_ref.format
 
             if fmt == "uuid":
-                if imports is not None:
-                    imports.stdlib("uuid", "UUID")
+                imports.stdlib("uuid", "UUID")
                 return "str | UUID"
 
             if fmt == "date":
-                if imports is not None:
-                    imports.stdlib("datetime", "date")
+                imports.stdlib("datetime", "date")
                 return "str | date"
 
             if fmt in self._DATETIME_FORMATS:
-                if imports is not None:
-                    imports.stdlib("datetime", "datetime")
+                imports.stdlib("datetime", "datetime")
                 return "str | datetime"
 
-            if fmt == "email":
+            if fmt in self._STRING_FORMAT_FROM_TYPES:
+                return self._STRING_FORMAT_FROM_TYPES[fmt]
 
-                return "str | msgspex.Email"
+        if isinstance(type_ref, IntegerType) and type_ref.format in self._INTEGER_FORMAT_FROM_TYPES:
+            return self._INTEGER_FORMAT_FROM_TYPES[type_ref.format]
 
-            if fmt == "idn-email":
-
-                return "str | msgspex.IDNEmail"
-
-            if fmt in ("uri", "url"):
-
-                return "str | msgspex.URI"
-            if fmt == "uri-reference":
-
-                return "str | msgspex.URIReference"
-            if fmt == "iri":
-
-                return "str | msgspex.IRI"
-            if fmt == "iri-reference":
-
-                return "str | msgspex.IRIReference"
-            if fmt == "hostname":
-
-                return "str | msgspex.Hostname"
-            if fmt == "idn-hostname":
-
-                return "str | msgspex.IDNHostname"
-            if fmt == "ipv4":
-
-                return "str | msgspex.IPv4"
-            if fmt == "ipv6":
-
-                return "str | msgspex.IPv6"
-            if fmt == "json-pointer":
-
-                return "str | msgspex.JsonPointer"
-            if fmt == "relative-json-pointer":
-
-                return "str | msgspex.RelativeJsonPointer"
-
-        if isinstance(type_ref, IntegerType):
-            if type_ref.format == "int32":
-
-                return "int | msgspex.Int32"
-
-            if type_ref.format == "int64":
-
-                return "int | msgspex.Int64"
-
-        if isinstance(type_ref, NumberType):
-            if type_ref.format == "float32":
-
-                return "float | msgspex.Float32"
-
-            if type_ref.format in ("float64", "double"):
-
-                return "float | msgspex.Float64"
+        if isinstance(type_ref, NumberType) and type_ref.format in self._NUMBER_FORMAT_FROM_TYPES:
+            return self._NUMBER_FORMAT_FROM_TYPES[type_ref.format]
 
         if isinstance(type_ref, ArrayType):
             item_input_type = self._from_input_type(type_ref.item_type, imports)
@@ -2514,17 +2876,14 @@ class PythonGenerator(ABCGenerator):
 
         if name == "timestamp":
             if isinstance(type_ref, StringType) and type_ref.format is None:
-
                 imports.stdlib("datetime", "datetime")
                 return "msgspex.StringTimestampDatetime", "str | datetime"
 
             if isinstance(type_ref, IntegerType) and type_ref.format is None:
-
                 imports.stdlib("datetime", "datetime")
                 return "msgspex.IntTimestampDatetime", "int | datetime"
 
             if isinstance(type_ref, NumberType) and type_ref.format in self._FLOAT_FORMATS:
-
                 imports.stdlib("datetime", "datetime")
                 return "msgspex.FloatTimestampDatetime", "float | datetime"
 
@@ -2538,10 +2897,13 @@ class PythonGenerator(ABCGenerator):
 
             if val is None:
                 continue
+
             if field.name == "pattern" and isinstance(val, str):
                 parts.append(f"pattern={_raw_string(val)}")
+
             elif isinstance(val, float) and val.is_integer():
                 parts.append(f"{field.name}={int(val)}")
+
             else:
                 parts.append(f"{field.name}={val!r}")
 
@@ -2550,10 +2912,13 @@ class PythonGenerator(ABCGenerator):
     def _collect_model_refs(self, type_ref: TypeRef, result: set[str]) -> None:
         if isinstance(type_ref, ModelRef):
             result.add(type_ref.name)
+
         elif isinstance(type_ref, ArrayType):
             self._collect_model_refs(type_ref.item_type, result)
+
         elif isinstance(type_ref, MapType):
             self._collect_model_refs(type_ref.value_type, result)
+
         elif isinstance(type_ref, UnionType):
             for variant in type_ref.variants:
                 self._collect_model_refs(variant, result)
@@ -2589,8 +2954,9 @@ class PythonGenerator(ABCGenerator):
         for endpoint in schema.endpoints:
             for op in endpoint.operations:
                 for resp in op.responses:
+
                     try:
-                        status_int = int(resp.status_code)
+                        int(resp.status_code)
                     except ValueError:
                         if resp.status_code != "default":
                             continue
@@ -2608,9 +2974,11 @@ class PythonGenerator(ABCGenerator):
         for endpoint in schema.endpoints:
             for op in endpoint.operations:
                 for resp in op.responses:
+
                     try:
                         status_int = int(resp.status_code)
                         if status_int >= 300:
+
                             for type_ref in resp.content.values():
                                 if isinstance(type_ref, ModelRef):
                                     result[type_ref.name].add(resp.status_code)
@@ -2643,22 +3011,25 @@ class PythonGenerator(ABCGenerator):
                     if resp.component_response_ref not in seen:
                         seen.add(resp.component_response_ref)
                         types.append(resp.component_response_ref)
-                        # Import from errors module
+
                         if self._controller_error_names and resp.component_response_ref in self._controller_error_names:
                             imports.local("..errors", resp.component_response_ref)
                 else:  # noqa
                     if resp.content:
                         for type_ref in resp.content.values():
                             t = self._type_str(type_ref, imports)
+
                             if t not in seen:
                                 seen.add(t)
                                 types.append(t)
                     else:
                         key = (resp.status_code, _first_docstring_line(resp.description) or "")
+
                         if inline_error_class_plan is not None and key in inline_error_class_plan:
                             class_name = inline_error_class_plan[key][0]
                         else:
                             class_name = f"{_to_pascal_case(method_name)}{_status_code_to_name(resp.status_code)}Error"
+
                         if class_name not in seen:
                             seen.add(class_name)
                             types.append(class_name)
@@ -2691,8 +3062,10 @@ class PythonGenerator(ABCGenerator):
         if hasattr(param, "location") and (has_request_body or param.location != dominant_type):
             if param.location == "path":
                 param_location = "saronia.Path"
+
             elif param.location == "query":
                 param_location = "saronia.Query"
+
             elif param.location == "header":
                 param_location = "saronia.Header"
 
@@ -2772,19 +3145,7 @@ class PythonGenerator(ABCGenerator):
             lines.append(field.code)
 
             if field.description:
-                desc_lines = [line for line in field.description.split("\n") if line.strip()]
-
-                if len(desc_lines) == 1:
-                    lines.append(f'    """{field.description.strip()}"""')
-                else:
-                    lines.append(f'    """{desc_lines[0]}')
-
-                    for desc_line in desc_lines[1:]:
-                        lines.append(f"    {desc_line}")
-
-                    lines.append('    """')
-
-                lines.append("")
+                self._append_docstring_block(lines, field.description)
 
         return "\n".join(lines)
 
@@ -2878,6 +3239,7 @@ class PythonGenerator(ABCGenerator):
 
         for op in operations:
             method_name = final_method_names[id(op)]
+
             for resp in op.responses:
                 key = self._status_only_error_key(resp)
                 if key is not None:
@@ -2892,6 +3254,7 @@ class PythonGenerator(ABCGenerator):
         for key, method_names in occurrences.items():
             status_code, description = key
             shared = len(method_names) > 1
+
             if shared and controller_base:
                 class_name = f"{_to_pascal_case(controller_base)}{_status_code_to_name(status_code)}Error"
             else:
@@ -2901,8 +3264,8 @@ class PythonGenerator(ABCGenerator):
                 class_name = f"{_to_pascal_case(method_names[0])}{_status_code_to_name(status_code)}Error"
 
             used_names.add(class_name)
-
             lines = [f"class {class_name}(saronia.StatusError[{status_code}]):"]
+
             if description:
                 lines.append(f'    """{description}"""')
             else:
@@ -2957,10 +3320,13 @@ class PythonGenerator(ABCGenerator):
 
         if request_body_model:
             decorators.append("@saronia.json")
+
         elif dominant_type == "query":
             decorators.append("@saronia.query")
+
         elif dominant_type == "header":
             decorators.append("@saronia.header")
+
         elif dominant_type == "path":
             decorators.append("@saronia.path")
 
@@ -2996,6 +3362,7 @@ class PythonGenerator(ABCGenerator):
 
                     json_name_arg = f', name="{field.name}"' if py_name != field.name else ""
                     hint = None if isinstance(field.type, UnionType) else self._name_hint(field.name, field.type, temp_imports)
+
                     if hint is not None:
                         base, from_type = hint
 

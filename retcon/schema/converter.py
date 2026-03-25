@@ -590,13 +590,19 @@ def _convert_response(status_code: str, response: typing.Any, context: _Conversi
     if ref:
         return None
 
+    response_description = getattr(response, "description", None)
     content: dict[str, TypeRef] = {}
     for content_type, media in (getattr(response, "content", None) or {}).items():
-        content[content_type] = _to_type_ref(getattr(media, "schema", None), context, name_hint=name_hint)
+        content[content_type] = _to_type_ref(
+            getattr(media, "schema", None),
+            context,
+            name_hint=name_hint,
+            field_description=response_description,
+        )
 
     return Response(
         status_code=str(status_code),
-        description=getattr(response, "description", None),
+        description=response_description,
         content=content,
     )
 
