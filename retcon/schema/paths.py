@@ -14,6 +14,7 @@ class Parameter(Node, kw_only=True):
     type: TypeRef
     required: bool = False
     description: str | None = None
+    deprecated: bool = False
 
 
 class RequestBody(Node, kw_only=True):
@@ -31,6 +32,7 @@ class Response(Node, kw_only=True):
     status_code: str
     description: str | None = None
     content: dict[str, TypeRef] = msgspec.field(default_factory=dict)
+    component_response_ref: str | None = None
 
 
 class Operation(Node, kw_only=True):
@@ -46,6 +48,7 @@ class Operation(Node, kw_only=True):
     request_body: RequestBody | None = None
     responses: list[Response] = msgspec.field(default_factory=list)
     deprecated: bool = False
+    security_requirements: list[dict[str, list[str]]] = msgspec.field(default_factory=list)
 
 
 class Endpoint(Node, kw_only=True):
@@ -56,4 +59,14 @@ class Endpoint(Node, kw_only=True):
     description: str | None = None
 
 
-__all__ = ("Endpoint", "Operation", "Parameter", "RequestBody", "Response")
+class NamedResponse(Node, kw_only=True):
+    """A named reusable response from components.responses."""
+
+    name: str
+    status_codes: list[str] = msgspec.field(default_factory=list)
+    description: str | None = None
+    content: dict[str, TypeRef] = msgspec.field(default_factory=dict)
+    schema_ref: str | None = None
+
+
+__all__ = ("Endpoint", "NamedResponse", "Operation", "Parameter", "RequestBody", "Response")

@@ -67,12 +67,15 @@ class NodeVisitor:
         """Recurse into every child :class:`Node` reachable from *node*."""
         for field_info in msgspec.structs.fields(node):
             value = getattr(node, field_info.name)
+
             if isinstance(value, Node):
                 self.visit(value)
+
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, Node):
                         self.visit(item)
+
             elif isinstance(value, dict):
                 for item in value.values():
                     if isinstance(item, Node):

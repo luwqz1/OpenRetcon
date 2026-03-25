@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-import typer
+try:
+    import typer
+except ImportError:
+    raise RuntimeError(
+        "typer is not installed for CLI application.\n* hint: pip install saronia[cli]",
+    ) from None
 
 from retcon.cli.generate import generate_app
 
@@ -14,10 +19,6 @@ app.add_typer(generate_app, name="generate")
 
 def main() -> None:
     app()
-
-
-if __name__ == "__main__":
-    main()
 
 
 __all__ = ("app", "main")

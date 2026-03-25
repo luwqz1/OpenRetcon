@@ -13,7 +13,6 @@ generate_app = typer.Typer(
 
 
 def _read_schema(source: str) -> bytes:
-    """Load raw schema bytes from a local path or HTTP(S) URL."""
     if source.startswith("http://") or source.startswith("https://"):
         try:
             import urllib.request
@@ -25,6 +24,7 @@ def _read_schema(source: str) -> bytes:
             raise typer.Exit(1) from exc
 
     path = Path(source)
+
     if not path.exists():
         typer.echo(f"error: file not found: {path}", err=True)
         raise typer.Exit(1)
@@ -55,11 +55,20 @@ def generate_python(
             "--output",
             "-o",
             metavar="DIR",
-            help="Directory to write the generated files into.",
+            help="Directory to write the generated files into. Defaults to current path + /api directory.",
             file_okay=False,
             resolve_path=True,
         ),
-    ] = Path("."),
+    ] = Path("./api"),
+    api_module_name: Annotated[
+        str,
+        typer.Option(
+            "--api",
+            "-a",
+            metavar="NAME",
+            help="Name for the API endpoint variable and module file. Defaults to output directory name or 'api'.",
+        ),
+    ] = "api",
     fmt: Annotated[
         bool,
         typer.Option(
@@ -75,16 +84,23 @@ def generate_python(
         from retcon.schema.pipeline import run_generation_pipeline
     except ImportError as exc:
         typer.echo(
-            f"error: Python generator dependencies are not installed.\n"
-            f"Install them with:  pip install \"openretcon[py]\"\n\n{exc}",
+            f'error: Python generator dependencies are not installed.\nInstall them with:  pip install "openretcon[py]"\n\n{exc}',
             err=True,
         )
         raise typer.Exit(1) from exc
 
+    if not schema.endswith(".json") and not schema.endswith(".yaml"):
+        typer.echo("Only json or yaml schema supported.")
+        raise typer.Exit(1)
+
     raw = _read_schema(schema)
 
     try:
-        result = run_generation_pipeline(raw, PythonGenerator(fmt=fmt))
+        result = run_generation_pipeline(
+            raw,
+            PythonGenerator(fmt=fmt, module_name=api_module_name),
+            document_type="json" if schema.endswith(".json") else "yaml",
+        )
     except Exception as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc

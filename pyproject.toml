@@ -1,16 +1,106 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "openretcon"
-version = "0.1.0"
-description = ""
+version = "0.0.1"
+description = "Open API client code generator."
+authors = [{ name = "luwqz1", email = "howluwqz1@gmail.com" }]
+license = { file = "LICENSE" }
+maintainers = [{ name = "luwqz1", email = "howluwqz1@gmail.com" }]
+keywords = [
+  "spec",
+  "msgspex",
+  "openapi",
+  "generator",
+  "codegen",
+  "typegen",
+  "api client",
+  "openapispec",
+  "controller",
+  "api controller",
+  "oas",
+]
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "msgspec>=0.20.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7,<1",
+    "basedpyright>=1.38.4,<2",
+    "pre-commit>=4.5.1,<5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["retcon"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py314"
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint]
+select = [
+  "I",
+  "D",
+  "N",
+  "PLR",
+  "Q",
+  "COM",
+  "TC",
+  "YTT",
+  "SIM",
+  "RUF022",
+]
+ignore = [
+  "COM812",
+  "N805",
+  "N815",
+  "N818",
+  "TC001",
+  "TC002",
+  "TC003",
+  "TC004",
+  "D100",
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D107",
+  "D202",
+  "D203",
+  "D205",
+  "D209",
+  "D211",
+  "D213",
+  "D400",
+  "D401",
+  "D404",
+  "D415",
+  "PLR2004",
+  "PLR0911",
+  "PLR0912",
+  "PLR0913",
+  "PLR0915",
+]
+fixable = ["ALL"]
+unfixable = ["ERA"]
+exclude = [".venv", ".idea", "docs"]
+
+[tool.uv]
+package = true
+
 [project.optional-dependencies]
 cli = ["typer>=0.24.0"]
-py = ["saronia"]
+py = ["saronia", "ruff"]
 
 [project.scripts]
 retcon = "retcon.cli:main"

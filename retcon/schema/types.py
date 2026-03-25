@@ -23,10 +23,7 @@ class Constraints(Node, kw_only=True):
     max_length: int | None = None
 
     def is_empty(self) -> bool:
-        return all(
-            getattr(self, f.name) is None
-            for f in msgspec.structs.fields(self)
-        )
+        return all(getattr(self, f.name) is None for f in msgspec.structs.fields(self))
 
 
 class TypeRef(Node, kw_only=True):
@@ -98,16 +95,16 @@ class AnyType(TypeRef, kw_only=True):
 
 
 __all__ = (
-    "Constraints",
-    "TypeRef",
-    "StringType",
-    "IntegerType",
-    "NumberType",
-    "BooleanType",
-    "ArrayType",
-    "MapType",
-    "UnionType",
-    "ModelRef",
-    "EnumRef",
     "AnyType",
+    "ArrayType",
+    "BooleanType",
+    "Constraints",
+    "EnumRef",
+    "IntegerType",
+    "MapType",
+    "ModelRef",
+    "NumberType",
+    "StringType",
+    "TypeRef",
+    "UnionType",
 )

@@ -21,8 +21,7 @@ from retcon.schema.types import (
 )
 
 
-class RustGenerator(ABCGenerator):
-    ...
+class RustGenerator(ABCGenerator): ...
 
 
 __all__ = ("RustGenerator",)

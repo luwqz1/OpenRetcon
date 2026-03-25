@@ -16,6 +16,7 @@ class Field(Node, kw_only=True):
     required: bool = True
     description: str | None = None
     default: typing.Any = msgspec.UNSET
+    deprecated: bool = False
 
 
 class Model(Node, kw_only=True):
@@ -27,6 +28,7 @@ class Model(Node, kw_only=True):
     name: str
     fields: list[Field] = msgspec.field(default_factory=list)
     description: str | None = None
+    deprecated: bool = False
 
 
 __all__ = ("Field", "Model")

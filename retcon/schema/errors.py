@@ -11,12 +11,14 @@ class ConversionError(SchemaError):
     Attributes:
         path: JSON-pointer-like path to the problematic element.
         detail: Human-readable explanation.
+
     """
 
     def __init__(self, detail: str, *, path: str | None = None) -> None:
         self.detail = detail
         self.path = path
         msg = f"{path}: {detail}" if path else detail
+
         super().__init__(msg)
 
 
@@ -33,7 +35,7 @@ class ValidationError(SchemaError):
 
 
 __all__ = (
-    "SchemaError",
     "ConversionError",
+    "SchemaError",
     "ValidationError",
 )
