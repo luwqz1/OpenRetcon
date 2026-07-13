@@ -69,14 +69,17 @@ def _raw_string(s: str) -> str:
 
 
 def _to_snake_case(name: str) -> str:
+    name = name.replace("OAuth", "Oauth")
     s = _CAMEL_RE.sub("_", name)
     s = re.sub(r"[^a-zA-Z0-9_]", "", s)
     s = re.sub(r"_+", "_", s)
-    return s.strip("_").lower()
+    s = s.strip("_").lower()
+    return re.sub(r"(^|_)i_ps(?=_|$)", r"\1ips", s)
 
 
 def _to_pascal_case(name: str) -> str:
-    return "".join(part.capitalize() for part in _to_snake_case(name).split("_"))
+    acronyms = {"api": "API", "oauth": "OAuth", "oauth2": "OAuth2", "ips": "IPs"}
+    return "".join(acronyms.get(part, part.capitalize()) for part in _to_snake_case(name).split("_"))
 
 
 def _resolve_method_name_conflicts(
@@ -651,6 +654,12 @@ class PythonGenerator(ABCGenerator):
         self._controller_response_names: frozenset[str] | None = None
         self._controller_error_names: frozenset[str] | None = None
         self._controller_classes: dict[str, str] = {}
+        self._model_categories: dict[str, str] = {}
+        self._enum_modules: dict[str, str] = {}
+        self._current_type_category: str | None = None
+        self._current_type_module: str | None = None
+        self._type_file_exports: dict[str, tuple[str, ...]] = {}
+        self._model_modules: dict[str, str] = {}
 
     @staticmethod
     def _enum_signature(enum: SchemaEnum) -> tuple[tuple[tuple[str, str | int | float | bool], ...], str | None]:
@@ -881,7 +890,7 @@ class PythonGenerator(ABCGenerator):
             while len(trimmed) > 1 and trimmed[-1] == "controller":
                 trimmed.pop()
 
-            while len(trimmed) > 1 and trimmed[0] in generic_head:
+            while trimmed and trimmed[0] in generic_head:
                 trimmed.pop(0)
 
             return trimmed
@@ -891,21 +900,25 @@ class PythonGenerator(ABCGenerator):
         if not shared_tokens:
             shared_tokens = trim_tokens(_longest_common_prefix(token_lists))
 
-        if not shared_tokens:
-            shared_tokens = trim_tokens(token_lists[0])
+        if shared_tokens:
+            candidates = [_to_pascal_case("_".join(shared_tokens)) + "Base"]
+        else:
+            # A shared HTTP verb such as "Get" has no useful domain context.
+            # Include all participating model contexts instead of emitting GetBase2.
+            contexts = [trim_tokens(tokens) or tokens for tokens in token_lists]
+            unique_contexts = list(dict.fromkeys("_".join(tokens) for tokens in contexts))
+            context_name = _to_pascal_case("_".join(unique_contexts))
+            candidates = [f"{context_name}Base", f"Shared{context_name}Base"]
 
-        if not shared_tokens:
-            shared_tokens = token_lists[0]
+        for candidate in candidates:
+            if candidate not in reserved:
+                return candidate
 
-        base = _to_pascal_case("_".join(shared_tokens)) + "Base"
-        name = base
+        base = candidates[-1]
         counter = 2
-
-        while name in reserved:
-            name = f"{base}{counter}"
+        while f"{base}{counter}" in reserved:
             counter += 1
-
-        return name
+        return f"{base}{counter}"
 
     def _extract_model_bases(self, models: list[Model]) -> tuple[list[Model], list[Model], dict[str, str]]:
         if len(models) < 2:
@@ -1451,6 +1464,10 @@ class PythonGenerator(ABCGenerator):
 
         self._parameter_dtos = {}
         self._controller_classes = {}
+        self._model_categories = {}
+        self._enum_modules = {}
+        self._type_file_exports = {}
+        self._model_modules = {}
 
         route_prefix = self._extract_route_prefix(schema)
         schema = self._rename_inline_error_models(schema, route_prefix)
@@ -1466,9 +1483,6 @@ class PythonGenerator(ABCGenerator):
             if isinstance(node, SchemaEnum):
                 enums.append(node)
 
-        if enums:
-            files["enums.py"] = self._generate_enums_file(enums)
-
         object_models = [
             m
             for m in schema.models
@@ -1477,9 +1491,6 @@ class PythonGenerator(ABCGenerator):
         for node in schema.custom_nodes:
             if isinstance(node, Model) and node.name not in response_names and node.name not in error_names and node.name not in inlined_request_body_names:
                 object_models.append(node)
-
-        if object_models:
-            files["objects.py"] = self._generate_objects_file(object_models)
 
         response_models = [m for m in schema.models if m.name in response_names]
         for node in schema.custom_nodes:
@@ -1495,9 +1506,6 @@ class PythonGenerator(ABCGenerator):
                 inferred = _infer_status_code_from_name(nr.name)
                 if inferred and inferred.startswith(("2", "3")):
                     response_named.append(nr)
-
-        if response_models or response_named:
-            files["responses.py"] = self._generate_responses_file(response_models, response_named)
 
         error_models = [m for m in schema.models if m.name in error_names]
 
@@ -1517,8 +1525,35 @@ class PythonGenerator(ABCGenerator):
                 if inferred and inferred.startswith(("4", "5")):
                     error_named.append(nr)
 
-        if error_models or error_named:
-            files["errors.py"] = self._generate_errors_file(error_models, error_statuses, error_named)
+        object_bases, object_models, object_model_bases = self._extract_model_bases(object_models)
+        response_bases, response_models, response_model_bases = self._extract_model_bases(response_models)
+        error_bases, error_models, error_model_bases = self._extract_model_bases_by_field_set(error_models)
+
+        self._model_categories = {
+            **{model.name: "objects" for model in [*object_bases, *object_models]},
+            **{model.name: "responses" for model in [*response_bases, *response_models]},
+            **{model.name: "errors" for model in [*error_bases, *error_models]},
+            **{response.name: "responses" for response in response_named},
+            **{response.name: "errors" for response in error_named},
+        }
+        self._enum_modules = {enum.name: _to_snake_case(enum.name) for enum in enums}
+
+        object_nodes = {model.name: model for model in [*object_bases, *object_models]}
+        response_nodes = {model.name: model for model in [*response_bases, *response_models]}
+        error_nodes = {model.name: model for model in [*error_bases, *error_models]}
+        response_nodes.update({response.name: response for response in response_named})
+        error_nodes.update({response.name: response for response in error_named})
+        object_plan = self._plan_type_files(object_nodes, object_model_bases)
+        response_plan = self._plan_type_files(response_nodes, response_model_bases)
+        error_plan = self._plan_type_files(error_nodes, error_model_bases)
+
+        for category, plan in (("objects", object_plan), ("responses", response_plan), ("errors", error_plan)):
+            self._model_modules.update({name: module for module, names in plan for name in names})
+
+        files.update(self._generate_enum_files(enums))
+        files.update(self._generate_object_files(object_nodes, object_model_bases, object_plan))
+        files.update(self._generate_response_files(response_nodes, response_model_bases, response_plan))
+        files.update(self._generate_error_files(error_nodes, error_model_bases, error_statuses, error_plan))
 
         if schema.security_schemes:
             files["auth.py"] = self._generate_auth_file(schema.security_schemes)
@@ -1533,7 +1568,7 @@ class PythonGenerator(ABCGenerator):
         files.update(self._generate_controller_files(schema, frozenset(response_names_with_named), frozenset(error_names_with_named), route_prefix))
 
         if self._parameter_dtos:
-            files["signatures.py"] = self._generate_parameters_file()
+            files.update(self._generate_parameter_files())
 
         for node in schema.custom_nodes:
             if isinstance(node, SchemaEnum | Model):
@@ -1576,7 +1611,8 @@ class PythonGenerator(ABCGenerator):
         return "/" + "/".join(common) if common else "/"
 
     def _generate_auth_file(self, security_schemes: list[SecurityScheme]) -> str:
-        lines = ["from __future__ import annotations", "", "import dataclasses", "", "from saronia.security import *", ""]
+        lines = ["from __future__ import annotations", "", "import dataclasses", ""]
+        security_classes = set()
 
         auth_classes: list[str] = []
         auth_fields: list[str] = []
@@ -1588,11 +1624,14 @@ class PythonGenerator(ABCGenerator):
             if isinstance(scheme, HttpScheme):
                 if scheme.scheme.lower() == "bearer":
                     auth_classes.append(f"{class_name} = HTTPBearer")
+                    security_classes.add("HTTPBearer")
 
                 elif scheme.scheme.lower() == "basic":
                     auth_classes.append(f"{class_name} = HTTPBasic")
+                    security_classes.add("HTTPBasic")
 
                 else:
+                    security_classes.add("HTTPAuthorization")
                     other_class_name = _to_pascal_case(scheme.scheme.replace("/", "_").replace("-", "_").replace(" ", "_"))
                     lines.append("")
                     lines.append("")
@@ -1604,18 +1643,22 @@ class PythonGenerator(ABCGenerator):
                 param_name = scheme.param_name
 
                 if scheme.location == "header":
+                    security_classes.add("HeaderAPIKey")
                     auth_classes.append(f'{class_name} = HeaderAPIKey["{param_name}"]')
                 elif scheme.location == "query":
+                    security_classes.add("QueryAPIKey")
                     auth_classes.append(f'{class_name} = QueryAPIKey["{param_name}"]')
                 elif scheme.location == "cookie":
+                    security_classes.add("CookieAPIKey")
                     auth_classes.append(f'{class_name} = CookieAPIKey["{param_name}"]')
 
             auth_fields.append(f"    {field_name}: {class_name} | None = None")
 
+        lines.insert(0, f"from saronia.security import {', '.join(security_classes)}")
         lines.extend(auth_classes)
         lines.append("")
         lines.append("")
-        lines.append("@dataclasses.dataclass")
+        lines.append("@dataclasses.dataclass(kw_only=True)")
         lines.append("class AuthorizationModel:")
         lines.extend(auth_fields)
         lines.append("")
@@ -1681,11 +1724,10 @@ class PythonGenerator(ABCGenerator):
     def _generate_init_files(self, files: dict[str, str]) -> dict[str, str]:
         result: dict[str, str] = {}
 
-        root_modules = [p.removesuffix(".py") for p in ("enums.py", "objects.py", "responses.py", "errors.py") if p in files]
         lines = []
 
-        for mod in root_modules:
-            lines.append(f"from .{mod} import *")
+        if any(path.startswith("types/") for path in files):
+            lines.append("from .types import *")
 
         if "auth.py" in files:
             lines.append("from .auth import *")
@@ -1734,6 +1776,33 @@ class PythonGenerator(ABCGenerator):
 
             result["controllers/__init__.py"] = "\n".join(lines)
 
+        type_categories = ("objects", "signatures", "enums", "errors", "responses")
+        type_lines = []
+
+        for category in type_categories:
+            modules = sorted(
+                path.removeprefix(f"types/{category}/").removesuffix(".py")
+                for path in files
+                if path.startswith(f"types/{category}/") and path.endswith(".py") and not path.endswith("/__init__.py")
+            )
+            if not modules:
+                continue
+
+            exports: list[str] = []
+            category_lines = []
+            for module in modules:
+                category_lines.append(f"from .{module} import *")
+                exports.extend(self._type_file_exports.get(f"types/{category}/{module}.py", ()))
+
+            category_lines.append("")
+            category_lines.append(_render_all(exports))
+            category_lines.append("")
+            result[f"types/{category}/__init__.py"] = "\n".join(category_lines)
+            type_lines.append(f"from .{category} import *")
+
+        if type_lines:
+            result["types/__init__.py"] = "\n".join(type_lines) + "\n"
+
         return result
 
     def generate_model(self, model: Model) -> str:
@@ -1762,100 +1831,210 @@ class PythonGenerator(ABCGenerator):
     def type_to_string(self, type_ref: TypeRef) -> str:
         return self._type_str(type_ref, None)
 
-    def _generate_enums_file(self, enums: list[SchemaEnum]) -> str:
-        imports = _Imports()
+    def _type_file(self, category: str, module: str) -> str:
+        return f"types/{category}/{module}.py"
+
+    def _node_dependencies(self, node: Model | NamedResponse, model_bases: dict[str, str]) -> set[str]:
+        dependencies: set[str] = set()
+        if isinstance(node, Model):
+            for field in node.fields:
+                self._collect_model_refs(field.type, dependencies)
+            if base := model_bases.get(node.name):
+                dependencies.add(base)
+        else:
+            if node.schema_ref:
+                dependencies.add(node.schema_ref)
+            for type_ref in node.content.values():
+                self._collect_model_refs(type_ref, dependencies)
+        return dependencies
+
+    def _plan_type_files(self, nodes: dict[str, Model | NamedResponse], model_bases: dict[str, str]) -> list[tuple[str, tuple[str, ...]]]:
+        dependencies = {name: self._node_dependencies(node, model_bases) & nodes.keys() for name, node in nodes.items()}
+        consumers = {name: 0 for name in nodes}
+        for refs in dependencies.values():
+            for ref in refs:
+                consumers[ref] += 1
+
+        planned: set[str] = set()
+        result: list[tuple[str, tuple[str, ...]]] = []
+
+        def collect(name: str, members: list[str], ancestors: set[str]) -> None:
+            if name in planned or name in ancestors:
+                return
+            planned.add(name)
+            for dependency in sorted(dependencies[name]):
+                if consumers[dependency] == 1:
+                    collect(dependency, members, ancestors | {name})
+            members.append(name)
+
+        for root in sorted(name for name, count in consumers.items() if count != 1):
+            members: list[str] = []
+            collect(root, members, set())
+            if members:
+                result.append((_to_snake_case(root), tuple(members)))
+
+        for name in sorted(nodes):
+            if name not in planned:
+                result.append((_to_snake_case(name), (name,)))
+                planned.add(name)
+
+        return result
+
+    def _local_type_import(self, imports: _Imports, name: str) -> None:
+        category = self._model_categories.get(name)
+        if category is None:
+            return
+
+        module_name = self._model_modules.get(name, _to_snake_case(name))
+        if self._current_type_category == category and self._current_type_module == module_name:
+            return
+        if self._current_type_category == category:
+            module = f".{module_name}"
+        elif self._current_type_category is not None:
+            module = f"..{category}.{module_name}"
+        else:
+            module = f"..types.{category}.{module_name}"
+        imports.local(module, name)
+
+    def _store_type_file(self, files: dict[str, str], category: str, module: str, names: tuple[str, ...], code: str) -> None:
+        path = self._type_file(category, module)
+        files[path] = code
+        self._type_file_exports[path] = names
+
+    def _render_type_file(self, category: str, module: str, names: tuple[str, ...], render: typing.Callable[[_Imports], str], *, error: bool = False, signature: _SignatureSpec | None = None, extra_imports: typing.Iterable[_Imports] = ()) -> str:
+        imports = _Imports(enums_module="..enums")
         imports.bare_third_party("msgspex")
+        if error:
+            imports.stdlib("http", "HTTPStatus")
+            imports.bare_third_party("saronia")
+        if signature is not None:
+            imports.bare_third_party("saronia")
+            imports.absorb(signature.imports)
+        for extra_imports_item in extra_imports:
+            imports.absorb(extra_imports_item)
 
-        parts = [self._render_enum(e) for e in enums]
-        all_decl = _render_all([e.name for e in enums])
-        return imports.render(future_annotations=False) + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
+        previous_category = self._current_type_category
+        previous_module = self._current_type_module
+        self._current_type_category = category
+        self._current_type_module = module
+        try:
+            body = render(imports)
+        finally:
+            self._current_type_category = previous_category
+            self._current_type_module = previous_module
+        return imports.render() + "\n\n" + body + "\n\n" + _render_all(list(names)) + "\n"
 
-    def _generate_objects_file(self, models: list[Model]) -> str:
-        imports = _Imports(enums_module=".enums")
-        imports.bare_third_party("msgspex")
-        base_models, rewritten_models, model_bases = self._extract_model_bases(models)
+    def _generate_enum_files(self, enums: list[SchemaEnum]) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for enum in enums:
+            module = _to_snake_case(enum.name)
+            code = self._render_type_file("enums", module, (enum.name,), lambda _imports, enum=enum: self._render_enum(enum))
+            self._store_type_file(files, "enums", module, (enum.name,), code)
+        return files
 
-        parts = [self._render_model(m, imports) for m in base_models]
-        parts.extend(self._render_model(m, imports, base=model_bases.get(m.name, "msgspex.Model")) for m in rewritten_models)
-        all_decl = _render_all([m.name for m in rewritten_models])
-        return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
+    def _generate_object_files(self, nodes: dict[str, Model], model_bases: dict[str, str], plan: list[tuple[str, tuple[str, ...]]]) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for module, names in plan:
+            def render(imports: _Imports, names: tuple[str, ...] = names) -> str:
+                parts = []
+                for name in names:
+                    model = nodes[name]
+                    base = model_bases.get(name, "msgspex.Model")
+                    if base != "msgspex.Model":
+                        self._local_type_import(imports, base)
+                    parts.append(self._render_model(model, imports, base=base))
+                return "\n\n\n".join(parts)
 
-    def _generate_parameters_file(self) -> str:
-        imports = _Imports(enums_module=".enums")
-        imports.bare_third_party("msgspex")
-        imports.bare_third_party("saronia")
+            code = self._render_type_file("objects", module, names, render)
+            self._store_type_file(files, "objects", module, names, code)
+        return files
 
-        rendered_parts: list[str] = []
+    def _generate_response_files(self, nodes: dict[str, Model | NamedResponse], model_bases: dict[str, str], plan: list[tuple[str, tuple[str, ...]]]) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for module, names in plan:
+            def render(imports: _Imports, names: tuple[str, ...] = names) -> str:
+                parts = []
+                for name in names:
+                    node = nodes[name]
+                    if isinstance(node, Model):
+                        base = model_bases.get(name, "msgspex.Model")
+                        if base != "msgspex.Model":
+                            self._local_type_import(imports, base)
+                        parts.append(self._render_model(node, imports, base=base))
+                    else:
+                        parts.append(self._render_named_response(node, imports, is_error=False))
+                return "\n\n\n".join(parts)
 
-        for spec in self._parameter_dtos.values():
-            imports.absorb(spec.imports)
+            code = self._render_type_file("responses", module, names, render)
+            self._store_type_file(files, "responses", module, names, code)
+        return files
 
+    def _generate_error_files(self, nodes: dict[str, Model | NamedResponse], model_bases: dict[str, str], error_statuses: dict[str, set[str]], plan: list[tuple[str, tuple[str, ...]]]) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for module, names in plan:
+            def render(imports: _Imports, names: tuple[str, ...] = names) -> str:
+                parts = []
+                for name in names:
+                    node = nodes[name]
+                    if isinstance(node, Model):
+                        base = model_bases.get(name)
+                        if base is not None:
+                            self._local_type_import(imports, base)
+                        parts.append(self._render_error_model(node, error_statuses.get(name, set()), imports, data_base=base))
+                    else:
+                        parts.append(self._render_named_response(node, imports, is_error=True))
+                return "\n\n\n".join(parts)
+
+            code = self._render_type_file("errors", module, names, render, error=True)
+            self._store_type_file(files, "errors", module, names, code)
+        return files
+
+    def _generate_parameter_files(self) -> dict[str, str]:
+        files: dict[str, str] = {}
         base_signatures, rewritten_fields, model_bases = self._extract_signature_bases(self._parameter_dtos)
-        for base_name, fields in base_signatures:
-            rendered_parts.append(self._render_signature_class(base_name, (), fields))
+        base_fields = {name: fields for name, fields in base_signatures}
+        self._model_categories.update({name: "signatures" for name in base_fields})
+        consumers = {name: 0 for name in base_fields}
+        for base in model_bases.values():
+            consumers[base] += 1
 
-        for dto_name, spec in self._parameter_dtos.items():
-            rendered_parts.append(
-                self._render_signature_class(
-                    dto_name,
-                    spec.decorators,
-                    rewritten_fields[dto_name],
-                    base=model_bases.get(dto_name, "msgspex.Model"),
-                )
+        plan: list[tuple[str, tuple[str, ...]]] = []
+        grouped_bases: set[str] = set()
+        for name in self._parameter_dtos:
+            base = model_bases.get(name)
+            names = (base, name) if base is not None and consumers[base] == 1 else (name,)
+            grouped_bases.update(names)
+            plan.append((_to_snake_case(name), names))
+        for name in base_fields:
+            if name not in grouped_bases:
+                plan.append((_to_snake_case(name), (name,)))
+
+        self._model_modules.update({name: module for module, names in plan for name in names})
+        for module, names in plan:
+            specs = [self._parameter_dtos[name] for name in names if name in self._parameter_dtos]
+            def render(_imports: _Imports, names: tuple[str, ...] = names) -> str:
+                parts = []
+                for name in names:
+                    if name in base_fields:
+                        parts.append(self._render_signature_class(name, (), base_fields[name]))
+                    else:
+                        base = model_bases.get(name, "msgspex.Model")
+                        if base != "msgspex.Model":
+                            self._local_type_import(_imports, base)
+                        spec = self._parameter_dtos[name]
+                        parts.append(self._render_signature_class(name, spec.decorators, rewritten_fields[name], base=base))
+                return "\n\n\n".join(parts)
+
+            code = self._render_type_file(
+                "signatures",
+                module,
+                names,
+                render,
+                signature=specs[0] if specs else None,
+                extra_imports=(spec.imports for spec in self._parameter_dtos.values()),
             )
-
-        all_decl = _render_all(list(self._parameter_dtos.keys()))
-        return imports.render() + "\n\n" + "\n\n\n".join(rendered_parts) + all_decl + "\n"
-
-    def _generate_responses_file(self, models: list[Model], named_responses: list[NamedResponse]) -> str:
-        imports = _Imports(enums_module=".enums")
-        imports.bare_third_party("msgspex")
-        base_models, rewritten_models, model_bases = self._extract_model_bases(models)
-
-        response_names = {m.name for m in rewritten_models}
-        response_names.update(nr.name for nr in named_responses)
-
-        self._controller_response_names = frozenset(response_names)
-        self._controller_error_names = frozenset()
-
-        try:
-            parts = [self._render_model(m, imports) for m in base_models]
-            parts.extend(self._render_model(m, imports, base=model_bases.get(m.name, "msgspex.Model")) for m in rewritten_models)
-            parts.extend(self._render_named_response(nr, imports, is_error=False) for nr in named_responses)
-            all_names = [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
-            all_decl = _render_all(all_names)
-            return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
-        finally:
-            self._controller_response_names = None
-            self._controller_error_names = None
-
-    def _generate_errors_file(
-        self,
-        models: list[Model],
-        error_statuses: dict[str, set[str]],
-        named_responses: list[NamedResponse],
-    ) -> str:
-        imports = _Imports(enums_module=".enums")
-        imports.stdlib("http", "HTTPStatus")
-        imports.bare_third_party("msgspex")
-        imports.bare_third_party("saronia")
-        base_models, rewritten_models, model_bases = self._extract_model_bases_by_field_set(models)
-
-        error_names = {m.name for m in rewritten_models}
-        error_names.update(nr.name for nr in named_responses)
-        self._controller_response_names = frozenset()
-        self._controller_error_names = frozenset(error_names)
-
-        try:
-            parts = [self._render_model(m, imports) for m in base_models]
-            parts.extend(self._render_error_model(m, error_statuses.get(m.name, set()), imports, data_base=model_bases.get(m.name)) for m in rewritten_models)
-            parts.extend(self._render_named_response(nr, imports, is_error=True) for nr in named_responses)
-            all_names = [m.name for m in rewritten_models] + [nr.name for nr in named_responses]
-            all_decl = _render_all(all_names)
-            return imports.render() + "\n\n" + "\n\n\n".join(parts) + all_decl + "\n"
-        finally:
-            self._controller_response_names = None
-            self._controller_error_names = None
+            self._store_type_file(files, "signatures", module, names, code)
+        return files
 
     def _generate_controller_files(
         self,
@@ -2315,25 +2494,7 @@ class PythonGenerator(ABCGenerator):
 
         if named_response.schema_ref:
             bases.append(named_response.schema_ref)
-
-            if (
-                (   is_error
-                    and self._controller_error_names
-                    and named_response.schema_ref in self._controller_error_names
-                )
-                or (
-                    not is_error
-                    and self._controller_response_names
-                    and named_response.schema_ref in self._controller_response_names
-                )
-            ):
-                pass
-            elif self._controller_error_names and named_response.schema_ref in self._controller_error_names:
-                imports.local(".errors", named_response.schema_ref)
-            elif self._controller_response_names and named_response.schema_ref in self._controller_response_names:
-                imports.local(".responses", named_response.schema_ref)
-            else:
-                imports.local(".objects", named_response.schema_ref)
+            self._local_type_import(imports, named_response.schema_ref)
 
         if is_error:
             if named_response.status_codes:
@@ -2348,6 +2509,8 @@ class PythonGenerator(ABCGenerator):
 
         if not bases:
             bases.append("msgspex.Model")
+        elif is_error and named_response.schema_ref is None:
+            bases.insert(0, "msgspex.Model")
 
         base_str = ", ".join(bases)
         lines: list[str] = [f"class {named_response.name}({base_str}, kw_only=True):"]
@@ -2561,8 +2724,8 @@ class PythonGenerator(ABCGenerator):
                 imports,
                 request_body_model_name,
             )
-            decorator_args.append(dto_name)
-            imports.local("..signatures", dto_name)
+            decorator_args.append(f"form={dto_name}")
+            imports.local(f"..types.signatures.{_to_snake_case(dto_name)}", dto_name)
 
         elif has_request_body_model:
             for p in path_params:
@@ -2629,17 +2792,10 @@ class PythonGenerator(ABCGenerator):
 
         if has_request_body_model and not use_dto:
             model_name = op.request_body.type.name  # type: ignore
-            decorator_args.append(model_name)
+            decorator_args.append(f"form={model_name}")
 
             if self._controller_response_names is not None and self._controller_error_names is not None:
-                if model_name in self._controller_error_names:
-                    module = "..errors"
-                elif model_name in self._controller_response_names:
-                    module = "..responses"
-                else:
-                    module = "..objects"
-
-                imports.local(module, model_name)
+                self._local_type_import(imports, model_name)
 
         op_auth = self._security_requirements_to_auth_expr(op.security_requirements)
 
@@ -2773,26 +2929,8 @@ class PythonGenerator(ABCGenerator):
         elif isinstance(type_ref, ModelRef):
             base = type_ref.name
 
-            if imports is not None and self._controller_response_names is not None and self._controller_error_names is not None:
-                if base in self._controller_error_names:
-                    module = "..errors"
-
-                elif base in self._controller_response_names:
-                    module = "..responses"
-
-                else:
-                    module = "..objects"
-
-                if module == "..objects" and imports._enums_module == ".enums":
-                    module = ".objects"
-
-                elif module == "..responses" and imports._enums_module == ".enums":
-                    module = ".responses"
-
-                elif module == "..errors" and imports._enums_module == ".enums":
-                    module = ".errors"
-
-                imports.local(module, base)
+            if imports is not None and base in self._model_categories:
+                self._local_type_import(imports, base)
 
         elif isinstance(type_ref, EnumRef):
             base = type_ref.name
@@ -3013,7 +3151,7 @@ class PythonGenerator(ABCGenerator):
                         types.append(resp.component_response_ref)
 
                         if self._controller_error_names and resp.component_response_ref in self._controller_error_names:
-                            imports.local("..errors", resp.component_response_ref)
+                            self._local_type_import(imports, resp.component_response_ref)
                 else:  # noqa
                     if resp.content:
                         for type_ref in resp.content.values():
@@ -3332,7 +3470,7 @@ class PythonGenerator(ABCGenerator):
 
         fields: list[tuple[str, str | None, bool]] = []
 
-        temp_imports = _Imports(enums_module=".enums")
+        temp_imports = _Imports(enums_module="..enums")
         temp_imports.bare_third_party("msgspex")
 
         has_body = request_body_model is not None

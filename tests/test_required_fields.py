@@ -5,6 +5,15 @@ from retcon.generators.python import PythonGenerator
 from retcon.schema.pipeline import run_generation_pipeline
 
 
+def _type_files(result: object, category: str) -> str:
+    files = result.files  # type: ignore[attr-defined]
+    return "\n".join(
+        content
+        for path, content in sorted(files.items())
+        if path.startswith(f"types/{category}/") and not path.endswith("/__init__.py")
+    )
+
+
 class RequiredFieldRenderingTests(unittest.TestCase):
     def test_required_fields_do_not_get_ellipsis_defaults(self) -> None:
         spec = {
@@ -33,7 +42,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("class SampleModel(msgspex.Model, kw_only=True):", objects_py)
         self.assertIn('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])', objects_py)
@@ -101,7 +110,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
 
         self.assertIn("class PostItemsCreateItemSignature(msgspex.Model, kw_only=True):", dto_py)
         self.assertIn('item_id: saronia.Path[str] = msgspex.field(name="itemId")', dto_py)
@@ -173,7 +182,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
 
         self.assertIn(
             'item_id: msgspex.Deprecated[saronia.Path[str], "Use item_id instead."] = msgspex.field(name="itemId")',
@@ -212,7 +221,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
         plain_idx = objects_py.index('plain_name: str = msgspex.field(name="plainName")')
         created_idx = objects_py.index('created_at: msgspex.isodatetime = msgspex.field(name="createdAt", converter=msgspex.From[str | datetime])')
         user_idx = objects_py.index('user_id: UUID = msgspex.field(name="userId", converter=msgspex.From[str | UUID])')
@@ -252,7 +261,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", objects_py)
         self.assertIn("timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])", objects_py)
@@ -285,7 +294,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("count: int", objects_py)
         self.assertNotIn("count: float", objects_py)
@@ -326,7 +335,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("plain_number: int", objects_py)
         self.assertIn("example_float_number: float", objects_py)
@@ -368,8 +377,8 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        enums_py = result.files["enums.py"]
-        objects_py = result.files["objects.py"]
+        enums_py = _type_files(result, "enums")
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("class ConfigProfileStatus(", enums_py)
         self.assertNotIn("class CreateConfigProfileStatus(", enums_py)
@@ -414,7 +423,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
 
         self.assertIn("class ConfigProfileBase(msgspex.Model, kw_only=True):", objects_py)
         self.assertIn("class CreateConfigProfileDto(ConfigProfileBase, kw_only=True):", objects_py)
@@ -472,7 +481,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
 
         self.assertIn("timestamp: msgspex.isodatetime = msgspex.field(converter=msgspex.From[str | datetime])", dto_py)
         self.assertIn("uuid: saronia.Header[UUID] = msgspex.field(converter=msgspex.From[str | UUID])", dto_py)
@@ -501,7 +510,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
         self.assertIn("date: date = msgspex.field(converter=msgspex.From[str | date])", objects_py)
 
     def test_special_uuid_name_uses_uuid_converter_in_model(self) -> None:
@@ -528,7 +537,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
         self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", objects_py)
 
     def test_special_date_name_uses_date_converter_in_dto(self) -> None:
@@ -577,7 +586,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
         self.assertIn("date: date = msgspex.field(converter=msgspex.From[str | date])", dto_py)
 
     def test_special_uuid_name_uses_uuid_converter_in_dto(self) -> None:
@@ -626,7 +635,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
         self.assertIn("uuid: UUID = msgspex.field(converter=msgspex.From[str | UUID])", dto_py)
 
     def test_shared_prefix_fields_are_extracted_into_signature_base_model(self) -> None:
@@ -669,7 +678,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
 
         self.assertIn("class BandwidthStatsBase(msgspex.Model, kw_only=True):", dto_py)
         self.assertIn("class GetBandwidthStatsControllerUserUsageByRangeSignature(BandwidthStatsBase, kw_only=True):", dto_py)
@@ -715,7 +724,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
 
         self.assertIn("class BandwidthStatsBase(msgspex.Model, kw_only=True):", dto_py)
         self.assertIn("uuid: saronia.Path[UUID]", dto_py)
@@ -759,7 +768,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
+        objects_py = _type_files(result, "objects")
         self.assertIn("uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])", objects_py)
         self.assertIn('optional_uuids: msgspex.Option[list[UUID]] = msgspex.field(default=..., name="optionalUuids", converter=msgspex.From[list[str | UUID] | None])', objects_py)
         self.assertIn("dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])", objects_py)
@@ -811,7 +820,7 @@ class RequiredFieldRenderingTests(unittest.TestCase):
             document_type="json",
         )
 
-        dto_py = result.files["signatures.py"]
+        dto_py = _type_files(result, "signatures")
         self.assertIn("uuids: list[UUID] = msgspex.field(converter=msgspex.From[list[str | UUID]])", dto_py)
         self.assertIn("dates: list[date] = msgspex.field(converter=msgspex.From[list[str | date]])", dto_py)
 
@@ -1041,6 +1050,102 @@ class RequiredFieldRenderingTests(unittest.TestCase):
         self.assertIn('item_id: saronia.Param[str, saronia.Path, "itemId"]', controller_py)
         self.assertIn("limit: saronia.Query[int] | None = None", controller_py)
         self.assertNotIn("saronia.Deprecated(", controller_py)
+
+    def test_unique_nested_models_share_a_file_and_shared_models_do_not(self) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "First": {
+                        "type": "object",
+                        "properties": {
+                            "unique": {"$ref": "#/components/schemas/Unique"},
+                            "shared": {"$ref": "#/components/schemas/Shared"},
+                        },
+                    },
+                    "Second": {
+                        "type": "object",
+                        "properties": {"shared": {"$ref": "#/components/schemas/Shared"}},
+                    },
+                    "Unique": {"type": "object", "properties": {"value": {"type": "string"}}},
+                    "Shared": {"type": "object", "properties": {"value": {"type": "string"}}},
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        first_py = result.files["types/objects/first.py"]
+        second_py = result.files["types/objects/second.py"]
+        shared_py = result.files["types/objects/shared.py"]
+
+        self.assertIn("class Unique(msgspex.Model, kw_only=True):", first_py)
+        self.assertIn("class First(msgspex.Model, kw_only=True):", first_py)
+        self.assertNotIn("types/objects/unique.py", result.files)
+        self.assertIn("from .shared import Shared", first_py)
+        self.assertIn("from .shared import Shared", second_py)
+        self.assertIn("class Shared(msgspex.Model, kw_only=True):", shared_py)
+
+    def test_ips_in_type_name_becomes_ips_in_file_name(self) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/ips": {
+                    "get": {
+                        "operationId": "getIPs",
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GetIPsResponse"}}},
+                            }
+                        },
+                    }
+                }
+            },
+            "components": {"schemas": {"GetIPsResponse": {"type": "object", "properties": {"items": {"type": "string"}}}}},
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        self.assertIn("types/responses/get_ips_response.py", result.files)
+        self.assertNotIn("types/responses/get_i_ps_response.py", result.files)
+
+    def test_extracted_bases_include_model_context_instead_of_get_base_counters(self) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "GetAlphaResponse": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}},
+                    "GetBetaResponse": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}},
+                    "GetGammaResponse": {"type": "object", "properties": {"code": {"type": "string"}, "value": {"type": "string"}}},
+                    "GetDeltaResponse": {"type": "object", "properties": {"code": {"type": "string"}, "value": {"type": "string"}}},
+                }
+            },
+        }
+
+        result = run_generation_pipeline(
+            json.dumps(spec).encode(),
+            PythonGenerator(fmt=False, module_name="api"),
+            document_type="json",
+        )
+
+        files = _type_files(result, "objects")
+        self.assertIn("class AlphaBetaBase(msgspex.Model, kw_only=True):", files)
+        self.assertIn("class DeltaGammaBase(msgspex.Model, kw_only=True):", files)
+        self.assertNotIn("class GetBase", files)
 
 
 if __name__ == "__main__":

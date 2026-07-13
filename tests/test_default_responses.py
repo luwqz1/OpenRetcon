@@ -5,6 +5,15 @@ from retcon.generators.python import PythonGenerator
 from retcon.schema.pipeline import run_generation_pipeline
 
 
+def _type_files(result: object, category: str) -> str:
+    files = result.files  # type: ignore[attr-defined]
+    return "\n".join(
+        content
+        for path, content in sorted(files.items())
+        if path.startswith(f"types/{category}/") and not path.endswith("/__init__.py")
+    )
+
+
 class DefaultResponsesTests(unittest.TestCase):
     def test_default_response_models_are_generated_in_responses_and_used_by_controllers(self) -> None:
         spec = {
@@ -80,16 +89,16 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        responses_py = result.files["responses.py"]
+        responses_py = _type_files(result, "responses")
         controller_options_py = result.files["controllers/options_controller.py"]
         controller_inline_options_py = result.files["controllers/inline_options_controller.py"]
 
         self.assertIn("class GetAuthenticationOptionsResponseDto(msgspex.Model, kw_only=True):", responses_py)
         self.assertIn("class InlineAuthenticationOptionsResponse(msgspex.Model, kw_only=True):", responses_py)
-        self.assertNotIn("objects.py", result.files)
-        self.assertIn("from ..responses import GetAuthenticationOptionsResponseDto", controller_options_py)
+        self.assertFalse(any(path.startswith("types/objects/") for path in result.files))
+        self.assertIn("from ..types.responses.get_authentication_options_response_dto import GetAuthenticationOptionsResponseDto", controller_options_py)
         self.assertIn("saronia.APIResult[GetAuthenticationOptionsResponseDto", controller_options_py)
-        self.assertIn("from ..responses import InlineAuthenticationOptionsResponse", controller_inline_options_py)
+        self.assertIn("from ..types.responses.inline_authentication_options_response import InlineAuthenticationOptionsResponse", controller_inline_options_py)
         self.assertIn("saronia.APIResult[InlineAuthenticationOptionsResponse]", controller_inline_options_py)
 
     def test_description_only_error_responses_render_as_status_error_in_controller(self) -> None:
@@ -142,9 +151,9 @@ class DefaultResponsesTests(unittest.TestCase):
         )
 
         controller_py = result.files["controllers/items_controller.py"]
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
 
-        self.assertIn("from ..errors import GetItemError", controller_py)
+        self.assertIn("from ..types.errors.get_item_error import GetItemError", controller_py)
         self.assertIn("class GetItemError(msgspex.Model, saronia.ModelStatusError[HTTPStatus.NOT_FOUND], kw_only=True):", errors_py)
         self.assertIn("class GetItemMethodNotAllowedError(saronia.StatusError[405]):", controller_py)
         self.assertIn('class GetItemProxyAuthenticationRequiredError(saronia.StatusError[407]):\n    """Proxy authentication required"""', controller_py)
@@ -306,8 +315,8 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        responses_py = result.files["responses.py"]
-        errors_py = result.files["errors.py"]
+        responses_py = _type_files(result, "responses")
+        errors_py = _type_files(result, "errors")
 
         self.assertIn("class ConfigProfileBase(msgspex.Model, kw_only=True):", responses_py)
         self.assertIn("class CreateConfigProfileResponseDto(ConfigProfileBase, kw_only=True):", responses_py)
@@ -361,7 +370,7 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
         controller_py = result.files["controllers/settings_controller.py"]
 
         self.assertIn("class SettingsControllerBadRequestError(", errors_py)
@@ -408,7 +417,7 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
         settings_controller_py = result.files["controllers/settings_controller.py"]
         users_controller_py = result.files["controllers/users_controller.py"]
 
@@ -456,7 +465,7 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
 
         self.assertIn("class AuthError(", errors_py)
         self.assertNotIn("UnauthorizedForbiddenError", errors_py)
@@ -507,12 +516,12 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        objects_py = result.files["objects.py"]
-        errors_py = result.files["errors.py"]
+        objects_py = _type_files(result, "objects")
+        errors_py = _type_files(result, "errors")
 
         self.assertIn("class BadRequestErrorErrors(", objects_py)
         self.assertNotIn("class RemnawaveSettingsControllerGetSettingsErrorErrors(", objects_py)
-        self.assertIn("from .objects import BadRequestErrorErrors", errors_py)
+        self.assertIn("from ..objects.bad_request_error_errors import BadRequestErrorErrors", errors_py)
         self.assertIn("list[BadRequestErrorErrors]", errors_py)
 
     def test_inline_error_model_uses_response_description_as_docstring(self) -> None:
@@ -548,7 +557,7 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
 
         self.assertIn("class SettingsControllerBadRequestError(", errors_py)
         self.assertIn('"""Bad request payload"""', errors_py)
@@ -599,8 +608,8 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
-        objects_py = result.files["objects.py"]
+        errors_py = _type_files(result, "errors")
+        objects_py = _type_files(result, "objects")
 
         self.assertIn('message: str\n    """Message text"""', errors_py)
         self.assertIn("errors: msgspex.Option[list[SettingsControllerBadRequestErrorErrors]]", errors_py)
@@ -668,7 +677,7 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
 
         self.assertIn("class BadRequestBase(msgspex.Model, kw_only=True):", errors_py)
         self.assertIn("message: str", errors_py)
@@ -736,17 +745,17 @@ class DefaultResponsesTests(unittest.TestCase):
             document_type="json",
         )
 
-        errors_py = result.files["errors.py"]
+        errors_py = _type_files(result, "errors")
 
-        self.assertIn("class FirstControllerBadRequestBase(msgspex.Model, kw_only=True):", errors_py)
+        self.assertIn("class FirstControllerBadRequestSecondControllerUnauthorizedBase(msgspex.Model, kw_only=True):", errors_py)
         self.assertIn("message: str", errors_py)
         self.assertIn('status_code: int = msgspex.field(name="statusCode")', errors_py)
         self.assertIn(
-            "class FirstControllerBadRequestError(FirstControllerBadRequestBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):",
+            "class FirstControllerBadRequestError(FirstControllerBadRequestSecondControllerUnauthorizedBase, saronia.ModelStatusError[HTTPStatus.BAD_REQUEST], kw_only=True):",
             errors_py,
         )
         self.assertIn(
-            "class SecondControllerUnauthorizedError(FirstControllerBadRequestBase, saronia.ModelStatusError[HTTPStatus.UNAUTHORIZED], kw_only=True):",
+            "class SecondControllerUnauthorizedError(FirstControllerBadRequestSecondControllerUnauthorizedBase, saronia.ModelStatusError[HTTPStatus.UNAUTHORIZED], kw_only=True):",
             errors_py,
         )
 
